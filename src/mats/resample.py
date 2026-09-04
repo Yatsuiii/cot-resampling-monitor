@@ -76,10 +76,13 @@ def total_variation(p: np.ndarray, q: np.ndarray) -> float:
     return float(0.5 * np.abs(p - q).sum())
 
 
-def _rollouts_from(backend, prefix, k, seed0, max_tokens) -> list[Rollout]:
+def _rollouts_from(backend, prompt, prefix, k, seed0, max_tokens) -> list[Rollout]:
+    """`prefix` is the CoT written so far; each rollout is the model's
+    continuation. The first sentence of the continuation is the regenerated
+    version of the sentence we are probing."""
     out = []
     for j in range(k):
-        text = backend.complete(prefix, seed=seed0 + j, max_tokens=max_tokens)
+        text = backend.complete(prompt, prefix=prefix, seed=seed0 + j, max_tokens=max_tokens)
         sentences = split_sentences(text)
         out.append(Rollout(parse_answer(text), sentences[0] if sentences else ""))
     return out
@@ -107,8 +110,8 @@ def sentence_importance(
     seed0: int,
     max_tokens: int,
 ) -> SentenceResult:
-    prefix = base_prompt + "\n" + "\n".join(sentences[:index])
-    rollouts = _rollouts_from(backend, prefix, k, seed0, max_tokens)
+    prefix = "\n".join(sentences[:index])
+    rollouts = _rollouts_from(backend, base_prompt, prefix, k, seed0, max_tokens)
     same, different = _split_by_similarity(rollouts, sentences[index], embedder, cosine_max)
     if len(same) < MIN_KEPT or len(different) < MIN_KEPT:
         return SentenceResult(index, 0.0, 0.0, len(same), len(different))
@@ -138,7 +141,9 @@ def analyse_cot(
     max_tokens: int = 1024,
 ) -> CotAnalysis:
     sentences = split_sentences(base_cot)
-    baseline = _rollouts_from(backend, base_prompt, k_baseline, seed * 1_000_000, max_tokens)
+    baseline = _rollouts_from(
+        backend, base_prompt, "", k_baseline, seed * 1_000_000, max_tokens
+    )
     baseline_dist = answer_distribution((r.answer for r in baseline), letters)
     base_answer = parse_answer(base_cot)
     results = tuple(

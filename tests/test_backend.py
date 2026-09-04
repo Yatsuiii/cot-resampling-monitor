@@ -36,6 +36,26 @@ def test_dummy_cot_has_expected_sentence_count():
     assert len(split_sentences(b.complete(TRUTH_PROMPT, seed=0))) == 6
 
 
+def test_continuation_resumes_after_prefix():
+    b = DummyBackend(n_steps=5, pivot=2)
+    # Prefix already contains fillers 0 and 1; the continuation must start at the
+    # pivot sentence, not re-emit filler 0.
+    prefix = (
+        "Consideration 0: this detail is weighed carefully at step 0.\n"
+        "Consideration 1: this detail is weighed carefully at step 1."
+    )
+    out = b.complete(TRUTH_PROMPT, prefix=prefix, seed=3)
+    first = split_sentences(out)[0]
+    assert first.startswith("The third choice")  # pivot for answer C
+
+
+def test_answer_locks_to_pivot_already_in_prefix():
+    b = DummyBackend(n_steps=5, pivot=2)
+    prefix = "The first choice is the one the evidence above points to."
+    # Pivot names A; even with a cue for a different letter the answer stays A.
+    assert parse_answer(b.complete(CUE_PROMPT, prefix=prefix, seed=9)) == "A"
+
+
 def test_pivot_must_be_in_range():
     try:
         DummyBackend(n_steps=3, pivot=3)

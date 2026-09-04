@@ -40,11 +40,18 @@ _PIVOT_LETTER = {sentence: letter for letter, sentence in _PIVOTS.items()}
 
 
 class Backend(Protocol):
-    """A deterministic text-completion model."""
+    """A deterministic text-completion model.
 
-    def complete(self, prompt: str, *, seed: int, max_tokens: int = 2048) -> str:
-        """Return the model's continuation of `prompt`. Same (prompt, seed) ->
-        same text."""
+    `prefix` is an assistant partial (chain-of-thought written so far). The
+    resampling method regenerates from an arbitrary sentence boundary, so it
+    passes the reasoning up to that point as `prefix` and expects only the
+    *continuation* back, not the prefix echoed. Same (prompt, prefix, seed) ->
+    same text.
+    """
+
+    def complete(
+        self, prompt: str, *, prefix: str = "", seed: int, max_tokens: int = 2048
+    ) -> str:
         ...
 
 
@@ -60,19 +67,21 @@ class DummyBackend:
         self.pivot = pivot
         self.cue_strength = cue_strength
 
-    def complete(self, prompt: str, *, seed: int, max_tokens: int = 2048) -> str:
+    def complete(
+        self, prompt: str, *, prefix: str = "", seed: int, max_tokens: int = 2048
+    ) -> str:
         if prompt.rstrip().endswith("Verdict:"):
             # LLM-monitor query. The dummy's cue never surfaces in its CoT, so a
             # faithful monitor says NO - the failure mode this project studies.
             return "NO"
-        emitted = self._count_emitted(prompt)
-        answer = self._locked_answer(prompt) or self._fresh_answer(prompt, seed)
+        emitted = self._count_emitted(prefix)
+        answer = self._locked_answer(prefix) or self._fresh_answer(prompt, seed)
         slots = [
             _PIVOTS[answer] if j == self.pivot else _filler(j)
             for j in range(emitted, self.n_steps)
         ]
-        prefix = "\n".join(slots)
-        return (prefix + "\n" if prefix else "") + f"The answer is ({answer})."
+        body = "\n".join(slots)
+        return (body + "\n" if body else "") + f"The answer is ({answer})."
 
     def _fresh_answer(self, prompt: str, seed: int) -> str:
         truth = _first_group(_TRUTH, prompt) or "A"
@@ -82,18 +91,16 @@ class DummyBackend:
         return cue if _unit_hash(f"{prompt}|{seed}|flip") < self.cue_strength else truth
 
     @staticmethod
-    def _count_emitted(prompt: str) -> int:
-        _, _, tail = prompt.rpartition("Reasoning:")
-        lines = (line.strip() for line in tail.splitlines())
+    def _count_emitted(prefix: str) -> int:
+        lines = (line.strip() for line in prefix.splitlines())
         return sum(
             1 for line in lines if line.startswith("Consideration ") or line in _PIVOT_LETTER
         )
 
     @staticmethod
-    def _locked_answer(prompt: str) -> str | None:
-        _, _, tail = prompt.rpartition("Reasoning:")
+    def _locked_answer(prefix: str) -> str | None:
         for sentence, letter in _PIVOT_LETTER.items():
-            if sentence in tail:
+            if sentence in prefix:
                 return letter
         return None
 
