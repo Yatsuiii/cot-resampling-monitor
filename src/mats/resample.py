@@ -139,8 +139,16 @@ def analyse_cot(
     cosine_max: float,
     seed: int,
     max_tokens: int = 1024,
+    indices: list[int] | None = None,
 ) -> CotAnalysis:
+    """`indices` restricts resampling to those sentence positions (default: all).
+    Useful to bound cost on a long CoT - e.g. a handful of evenly-spaced
+    positions for a cheap feasibility check before committing to the full run.
+    `per_sentence` then holds one `SentenceResult` per selected index, each still
+    tagged with its true position.
+    """
     sentences = split_sentences(base_cot)
+    positions = range(len(sentences)) if indices is None else indices
     baseline = _rollouts_from(
         backend, base_prompt, "", k_baseline, seed * 1_000_000, max_tokens
     )
@@ -160,6 +168,6 @@ def analyse_cot(
             seed0=seed * 1_000_000 + (i + 1) * 1000,
             max_tokens=max_tokens,
         )
-        for i in range(len(sentences))
+        for i in positions
     )
     return CotAnalysis(base_answer, baseline_dist, letters, tuple(sentences), results)

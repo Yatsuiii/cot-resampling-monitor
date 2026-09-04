@@ -63,3 +63,17 @@ def test_analysis_has_one_result_per_sentence():
     prompt = build_prompt(QUESTION, cue_letter="A", groundtruth_marker=True)
     n_sentences = len(split_sentences(backend.complete(prompt, seed=7)))
     assert len(analysis.per_sentence) == n_sentences
+
+
+def test_indices_restricts_to_selected_positions():
+    backend = DummyBackend(n_steps=5, pivot=2, cue_strength=0.7)
+    prompt = build_prompt(QUESTION, cue_letter="A", groundtruth_marker=True)
+    cot = backend.complete(prompt, seed=7)
+    analysis = analyse_cot(
+        backend, HashEmbedder(), base_prompt=prompt, base_cot=cot, letters=LETTERS,
+        k_sentence=60, k_baseline=40, cosine_max=0.85, seed=7, indices=[0, 2],
+    )
+    assert [r.index for r in analysis.per_sentence] == [0, 2]
+    # The pivot (index 2) is still found even though most sentences were skipped.
+    pivot_result = analysis.per_sentence[1]
+    assert pivot_result.index == 2 and pivot_result.importance > 0.5
