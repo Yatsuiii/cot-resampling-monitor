@@ -1,0 +1,19 @@
+[project]
+name = "mats-resampling-monitor"
+version = "0.0.1"
+description = "Resampling-only CoT unfaithfulness monitor (MATS 12.0, Neel stream)"
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+# Installed only on the Kaggle GPU runner, not needed for the local smoke path.
+kaggle = ["vllm", "sentence-transformers", "datasets", "matplotlib"]
+dev = ["pytest>=7", "ruff"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
