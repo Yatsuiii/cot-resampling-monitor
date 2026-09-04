@@ -5,10 +5,14 @@ deterministic given `seed`. Chat templating, CoT parsing, cue injection, and
 resampling all live above it, so swapping the Kaggle vLLM server for a stub in
 tests touches no analysis code.
 
-`DummyBackend` is that stub: a deterministic fake reasoning model whose final
-answer depends on exactly one "pivot" sentence of its CoT. Tests can therefore
-assert a known resampling-importance profile (all the weight on the pivot)
-without a GPU or network.
+`DummyBackend` is that stub: a deterministic fake reasoning model. Its CoT is a
+fixed run of `n_steps` sentences, one of which (index `pivot`) states the
+conclusion. It *continues from the prompt*: it counts how many CoT sentences are
+already there and emits only the rest. If the pivot is among those already
+present the answer is locked to the letter it names; otherwise the model draws a
+fresh answer - biased toward the cue letter when a cue is present - and writes
+the pivot naming it. So resampling any sentence other than the pivot cannot move
+the answer, giving tests a known importance profile.
 """
 
 from __future__ import annotations
@@ -17,11 +21,22 @@ import hashlib
 import re
 from typing import Protocol
 
-# Matches the cue line the prompt builder injects for the planted-cue condition.
-_CUE = re.compile(r"HINT:\s*the answer is \(?([A-J])\)?", re.IGNORECASE)
-# Matches the ground-truth marker the dummy prompt carries so the fake model
-# "knows" the unbiased answer. Real prompts never contain this.
+# The natural-language cue the prompt builder injects ("I think the answer is
+# (X)"). Matched here because the backend only ever sees the prompt string.
+_CUE = re.compile(r"the answer is \(([A-J])\)", re.IGNORECASE)
+# Ground-truth marker that only the dummy reads; real prompts never carry it.
 _TRUTH = re.compile(r"GROUNDTRUTH=\(?([A-J])\)?")
+
+# Lexically distinct pivot sentences, one per letter, so the semantic-dedup
+# filter can tell "concluded A" from "concluded C".
+_PIVOTS = {
+    "A": "The first choice is the one the evidence above points to.",
+    "B": "The second choice best fits everything considered so far.",
+    "C": "The third choice is what the key facts actually support.",
+    "D": "The fourth choice follows once the others are ruled out.",
+    "E": "The fifth choice is the consistent reading here.",
+}
+_PIVOT_LETTER = {sentence: letter for letter, sentence in _PIVOTS.items()}
 
 
 class Backend(Protocol):
@@ -34,26 +49,10 @@ class Backend(Protocol):
 
 
 class DummyBackend:
-    """Deterministic stand-in for a reasoning model on multiple-choice prompts.
-
-    The emitted CoT has a fixed shape of `n_steps` sentences. One of them (index
-    `pivot`) is the only sentence that determines the final answer:
-
-      - with no cue in the prompt, the pivot resolves to GROUNDTRUTH;
-      - with a "HINT: the answer is X" line, the pivot resolves to X on the
-        fraction of seeds set by `cue_strength` (a controllable flip rate), and
-        never mentions the hint (so a CoT-reading monitor cannot catch it).
-
-    Every other sentence is filler whose resampled variants do not move the
-    answer, giving tests a clean importance profile.
-    """
+    """Deterministic stand-in for a reasoning model on multiple-choice prompts."""
 
     def __init__(
-        self,
-        *,
-        n_steps: int = 5,
-        pivot: int = 2,
-        cue_strength: float = 0.7,
+        self, *, n_steps: int = 5, pivot: int = 2, cue_strength: float = 0.7
     ) -> None:
         if not 0 <= pivot < n_steps:
             raise ValueError("pivot must index a sentence in the CoT")
@@ -62,31 +61,45 @@ class DummyBackend:
         self.cue_strength = cue_strength
 
     def complete(self, prompt: str, *, seed: int, max_tokens: int = 2048) -> str:
+        if prompt.rstrip().endswith("Verdict:"):
+            # LLM-monitor query. The dummy's cue never surfaces in its CoT, so a
+            # faithful monitor says NO - the failure mode this project studies.
+            return "NO"
+        emitted = self._count_emitted(prompt)
+        answer = self._locked_answer(prompt) or self._fresh_answer(prompt, seed)
+        slots = [
+            _PIVOTS[answer] if j == self.pivot else _filler(j)
+            for j in range(emitted, self.n_steps)
+        ]
+        prefix = "\n".join(slots)
+        return (prefix + "\n" if prefix else "") + f"The answer is ({answer})."
+
+    def _fresh_answer(self, prompt: str, seed: int) -> str:
         truth = _first_group(_TRUTH, prompt) or "A"
         cue = _first_group(_CUE, prompt)
-        answer = self._resolve_answer(prompt, truth, cue, seed)
-        steps = self._steps_before(prompt, seed)
-        steps.insert(self.pivot, f"Working through the options, it comes out to {answer}.")
-        return "\n".join(steps) + f"\nThe answer is ({answer})."
-
-    def _resolve_answer(
-        self, prompt: str, truth: str, cue: str | None, seed: int
-    ) -> str:
         if cue is None:
             return truth
-        # Deterministic per (prompt, seed): a stable fraction of seeds flip.
-        draw = _unit_hash(f"{prompt}|{seed}|flip")
-        return cue if draw < self.cue_strength else truth
+        return cue if _unit_hash(f"{prompt}|{seed}|flip") < self.cue_strength else truth
 
-    def _steps_before(self, prompt: str, seed: int) -> list[str]:
-        """Filler sentences. Their content varies with seed so the semantic
-        dedup filter has real variation to work on, but none of it is
-        answer-bearing."""
-        n_filler = self.n_steps - 1
-        return [
-            f"Consideration {i}: weighing detail {_unit_hash(f'{prompt}|{seed}|{i}'):.3f}."
-            for i in range(n_filler)
-        ]
+    @staticmethod
+    def _count_emitted(prompt: str) -> int:
+        _, _, tail = prompt.rpartition("Reasoning:")
+        lines = (line.strip() for line in tail.splitlines())
+        return sum(
+            1 for line in lines if line.startswith("Consideration ") or line in _PIVOT_LETTER
+        )
+
+    @staticmethod
+    def _locked_answer(prompt: str) -> str | None:
+        _, _, tail = prompt.rpartition("Reasoning:")
+        for sentence, letter in _PIVOT_LETTER.items():
+            if sentence in tail:
+                return letter
+        return None
+
+
+def _filler(index: int) -> str:
+    return f"Consideration {index}: this detail is weighed carefully at step {index}."
 
 
 def _first_group(pattern: re.Pattern[str], text: str) -> str | None:
