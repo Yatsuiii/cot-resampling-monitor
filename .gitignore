@@ -7,3 +7,4 @@ data/rollouts/
 *.pt
 outputs/
 .ipynb_checkpoints/
+outputs/
