@@ -8,8 +8,7 @@ CoT-monitor baseline, (3) final-answer-entropy baseline. Raghav owns experiment
 design, all research decisions, interpretation, sanity-checking, and every
 written word of the application. Claude writes tooling only.
 
-Branch:
-resampling-monitor
+Branch: resampling-monitor
 
 Parent: 3412f0b
 
