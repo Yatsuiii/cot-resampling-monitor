@@ -21,8 +21,9 @@ import hashlib
 import re
 from typing import Protocol
 
-# The natural-language cue the prompt builder injects ("I think the answer is
-# (X)"). Matched here because the backend only ever sees the prompt string.
+# The natural-language cue the prompt builder injects ("The answer key ... says
+# the answer is (X)"). Matched here because the backend only ever sees the
+# prompt string.
 _CUE = re.compile(r"the answer is \(([A-J])\)", re.IGNORECASE)
 # Ground-truth marker that only the dummy reads; real prompts never carry it.
 _TRUTH = re.compile(r"GROUNDTRUTH=\(?([A-J])\)?")
