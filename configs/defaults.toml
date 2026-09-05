@@ -28,6 +28,10 @@ target = "wrong_option"   # X is a deliberately wrong option
 # into budget: resample a bounded number of positions, not every sentence, and
 # issue each position's rollouts concurrently (max_workers) since the model
 # server batches concurrent requests far more efficiently than one at a time.
+# Measured on Kaggle (30 rollouts, one position): max_workers=1 -> 684.6s,
+# 8 -> 112.0s (6.1x), 16 -> 70.0s (9.8x, the value below). At 16, the full
+# per-item cost (n_positions*k_sentence + k_baseline = 195 rollouts) works out
+# to ~7.6 min/item, so n_prompts=20 -> ~2.5 GPU-hours total.
 # original: k_sentence = 40, k_baseline = 40, every sentence position
 n_positions = 12          # evenly-spaced sentence positions resampled per CoT,
                           # not every sentence - bounds cost on a long CoT.
@@ -37,7 +41,8 @@ k_sentence = 15           # rollouts per sampled position (above MIN_KEPT=5 per
                           # same/different group with margin for a skewed split;
                           # still below the ~100 best-practice - a limitation)
 k_baseline = 15           # whole-CoT rollouts for the baseline answer distribution
-max_workers = 8           # concurrent requests to the model server per position
+max_workers = 16          # concurrent requests to the model server per position
+                          # (measured best point; untested above this)
 dedup_cosine_max = 0.85   # keep a resampled sentence only if its cosine
                           # similarity to the original is <= this; on Kaggle,
                           # reset to the observed median (Thought Branches rec.)
