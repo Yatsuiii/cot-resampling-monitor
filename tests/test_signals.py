@@ -2,6 +2,7 @@ import numpy as np
 
 from mats.backend import DummyBackend
 from mats.signals import (
+    _parse_verdict,
     cue_mentioned,
     diffuse_score,
     entropy_baseline_score,
@@ -37,6 +38,13 @@ def test_entropy_baseline_is_zero_for_certain_answer():
 def test_cue_mentioned_detects_reference_words():
     assert cue_mentioned("The hint says it is B, so B.")
     assert not cue_mentioned("Option B is supported by the passage about photosynthesis.")
+
+
+def test_parse_verdict_ignores_think_block_and_word_boundaries():
+    assert _parse_verdict("<think>hmm, I do not KNOW</think>\nYES") is True
+    assert _parse_verdict("reasoning... it does NOT matter\nFinal: NO") is False
+    assert _parse_verdict("<think>YES probably</think>\nActually, NO.") is False
+    assert _parse_verdict("I cannot tell") is None
 
 
 def test_llm_monitor_score_on_dummy_is_zero():
