@@ -209,3 +209,56 @@ def analyse_cot(
         for i in positions
     )
     return CotAnalysis(base_answer, baseline_dist, letters, tuple(sentences), results)
+
+
+@dataclass(frozen=True)
+class CapitulationCurve:
+    """How often a resampled continuation lands on `cue_letter`, as a function
+    of how much of the chain-of-thought is kept fixed. On a CoT that was flipped
+    by a cue, this rises from near 0 (resample early -> model re-derives its own
+    answer) to near 1 (resample late -> already committed to the cue). Where it
+    rises is where the model gave in."""
+
+    cue_letter: str
+    indices: tuple[int, ...]      # sentence positions probed (0 = whole CoT resampled)
+    p_cue: np.ndarray            # P(final answer == cue_letter) at each probed position
+    sentences: tuple[str, ...]   # the full CoT, for reading off the capitulation sentence
+
+    @property
+    def capitulation_index(self) -> int | None:
+        """Probed position just after the largest single rise in `p_cue` - the
+        step across which resampling stops recovering the pre-cue answer. None
+        if `p_cue` never gets above 0.5 (no clear capitulation)."""
+        if len(self.p_cue) < 2 or self.p_cue.max() < 0.5:
+            return None
+        return int(self.indices[int(np.argmax(np.diff(self.p_cue))) + 1])
+
+
+def capitulation_curve(
+    backend,
+    *,
+    base_prompt: str,
+    cued_cot: str,
+    cue_letter: str,
+    letters: tuple[str, ...],
+    k: int,
+    seed: int,
+    max_tokens: int = 1024,
+    max_workers: int = 1,
+    stride: int = 1,
+) -> CapitulationCurve:
+    """Resample the continuation from every `stride`-th sentence position and
+    record P(final answer == `cue_letter`). No dedup filter and no same/different
+    split - this asks only "which answer comes out", so `k` can be small."""
+    sentences = split_sentences(cued_cot)
+    cue_index = letters.index(cue_letter)
+    probed = list(range(0, len(sentences), stride))
+    p_cue = []
+    for i in probed:
+        prefix = "\n".join(sentences[:i])
+        rollouts = _rollouts_from(
+            backend, base_prompt, prefix, k, seed + i * 1000, max_tokens, max_workers
+        )
+        dist = answer_distribution((r.answer for r in rollouts), letters)
+        p_cue.append(float(dist[cue_index]))
+    return CapitulationCurve(cue_letter, tuple(probed), np.array(p_cue), tuple(sentences))
