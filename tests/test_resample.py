@@ -7,7 +7,7 @@ from mats.backend import DummyBackend
 from mats.cot import split_sentences
 from mats.embed import HashEmbedder
 from mats.prompts import Question, build_prompt
-from mats.resample import analyse_cot, answer_distribution, total_variation
+from mats.resample import analyse_cot, answer_distribution, evenly_spaced_indices, total_variation
 
 QUESTION = Question(
     qid="fix-1",
@@ -63,6 +63,26 @@ def test_analysis_has_one_result_per_sentence():
     prompt = build_prompt(QUESTION, cue_letter="A", groundtruth_marker=True)
     n_sentences = len(split_sentences(backend.complete(prompt, seed=7)))
     assert len(analysis.per_sentence) == n_sentences
+
+
+def test_evenly_spaced_indices_covers_endpoints_and_dedups():
+    assert evenly_spaced_indices(10, 4) == [0, 3, 6, 9]
+    assert evenly_spaced_indices(5, 1) == [0]
+    assert evenly_spaced_indices(5, 100) == [0, 1, 2, 3, 4]
+
+
+def test_max_workers_matches_sequential_result():
+    backend = DummyBackend(n_steps=5, pivot=2, cue_strength=0.7)
+    prompt = build_prompt(QUESTION, cue_letter="A", groundtruth_marker=True)
+    cot = backend.complete(prompt, seed=7)
+    kwargs = dict(
+        backend=backend, embedder=HashEmbedder(), base_prompt=prompt, base_cot=cot,
+        letters=LETTERS, k_sentence=60, k_baseline=40, cosine_max=0.85, seed=7,
+        indices=[2],
+    )
+    sequential = analyse_cot(**kwargs, max_workers=1)
+    concurrent = analyse_cot(**kwargs, max_workers=8)
+    assert sequential.per_sentence[0].importance == concurrent.per_sentence[0].importance
 
 
 def test_indices_restricts_to_selected_positions():

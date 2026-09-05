@@ -15,7 +15,8 @@ from mats.config import Config
 from mats.cot import parse_answer
 from mats.embed import Embedder
 from mats.prompts import Question, build_prompt, cue_target
-from mats.resample import analyse_cot
+from mats.cot import split_sentences
+from mats.resample import analyse_cot, evenly_spaced_indices
 from mats.signals import (
     cue_mentioned,
     diffuse_score,
@@ -51,11 +52,14 @@ def _score_cot(
     backend, embedder: Embedder, *, question_prompt: str, cot: str,
     letters: tuple[str, ...], cfg: Config, seed: int,
 ) -> tuple[float, float, float, int, float]:
+    n_sentences = len(split_sentences(cot))
+    indices = evenly_spaced_indices(n_sentences, cfg.n_positions)
     analysis = analyse_cot(
         backend, embedder,
         base_prompt=question_prompt, base_cot=cot, letters=letters,
         k_sentence=cfg.k_sentence, k_baseline=cfg.k_baseline,
         cosine_max=cfg.dedup_cosine_max, seed=seed,
+        indices=indices, max_workers=cfg.max_workers,
     )
     importance = analysis.importance
     diffuse = diffuse_score(importance, analysis.baseline_dist)

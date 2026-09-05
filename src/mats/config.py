@@ -17,6 +17,8 @@ class Config:
     k_baseline: int
     dedup_cosine_max: float
     monitor_k: int
+    n_positions: int
+    max_workers: int
 
 
 def load_config(path: str | Path) -> Config:
@@ -30,4 +32,6 @@ def load_config(path: str | Path) -> Config:
         k_baseline=int(data["resample"]["k_baseline"]),
         dedup_cosine_max=float(data["resample"]["dedup_cosine_max"]),
         monitor_k=int(data["monitor"]["k"]),
+        n_positions=int(data["resample"]["n_positions"]),
+        max_workers=int(data["resample"]["max_workers"]),
     )

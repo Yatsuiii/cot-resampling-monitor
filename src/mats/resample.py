@@ -18,6 +18,8 @@ as open as it was at the start.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 from dataclasses import dataclass
 
 import numpy as np
@@ -76,16 +78,33 @@ def total_variation(p: np.ndarray, q: np.ndarray) -> float:
     return float(0.5 * np.abs(p - q).sum())
 
 
-def _rollouts_from(backend, prompt, prefix, k, seed0, max_tokens) -> list[Rollout]:
+def _one_rollout(backend, prompt, prefix, seed, max_tokens) -> Rollout:
+    text = backend.complete(prompt, prefix=prefix, seed=seed, max_tokens=max_tokens)
+    sentences = split_sentences(text)
+    return Rollout(parse_answer(text), sentences[0] if sentences else "")
+
+
+def _rollouts_from(backend, prompt, prefix, k, seed0, max_tokens, max_workers=1) -> list[Rollout]:
     """`prefix` is the CoT written so far; each rollout is the model's
     continuation. The first sentence of the continuation is the regenerated
-    version of the sentence we are probing."""
-    out = []
-    for j in range(k):
-        text = backend.complete(prompt, prefix=prefix, seed=seed0 + j, max_tokens=max_tokens)
-        sentences = split_sentences(text)
-        out.append(Rollout(parse_answer(text), sentences[0] if sentences else ""))
-    return out
+    version of the sentence we are probing.
+
+    `max_workers` > 1 issues the k requests concurrently via a thread pool -
+    each is an independent HTTP call to the model server, which batches
+    concurrent requests far more efficiently than one at a time. Rollout order
+    doesn't matter (we only ever aggregate into a distribution), so this is
+    safe with no ordering guarantee.
+    """
+    if max_workers <= 1:
+        return [
+            _one_rollout(backend, prompt, prefix, seed0 + j, max_tokens) for j in range(k)
+        ]
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [
+            pool.submit(_one_rollout, backend, prompt, prefix, seed0 + j, max_tokens)
+            for j in range(k)
+        ]
+        return [f.result() for f in futures]
 
 
 def _split_by_similarity(rollouts, original, embedder: Embedder, cosine_max: float):
@@ -109,9 +128,10 @@ def sentence_importance(
     cosine_max: float,
     seed0: int,
     max_tokens: int,
+    max_workers: int = 1,
 ) -> SentenceResult:
     prefix = "\n".join(sentences[:index])
-    rollouts = _rollouts_from(backend, base_prompt, prefix, k, seed0, max_tokens)
+    rollouts = _rollouts_from(backend, base_prompt, prefix, k, seed0, max_tokens, max_workers)
     same, different = _split_by_similarity(rollouts, sentences[index], embedder, cosine_max)
     if len(same) < MIN_KEPT or len(different) < MIN_KEPT:
         return SentenceResult(index, 0.0, 0.0, len(same), len(different))
@@ -127,6 +147,18 @@ def sentence_importance(
     )
 
 
+def evenly_spaced_indices(n_sentences: int, n_positions: int) -> list[int]:
+    """`n_positions` sentence indices spread across [0, n_sentences), for
+    bounding resampling cost on a long CoT. Returns every index if
+    `n_positions` already covers them all."""
+    if n_positions >= n_sentences:
+        return list(range(n_sentences))
+    if n_positions <= 1:
+        return [0]
+    step = (n_sentences - 1) / (n_positions - 1)
+    return sorted({round(i * step) for i in range(n_positions)})
+
+
 def analyse_cot(
     backend,
     embedder: Embedder,
@@ -140,17 +172,22 @@ def analyse_cot(
     seed: int,
     max_tokens: int = 1024,
     indices: list[int] | None = None,
+    max_workers: int = 1,
 ) -> CotAnalysis:
     """`indices` restricts resampling to those sentence positions (default: all).
     Useful to bound cost on a long CoT - e.g. a handful of evenly-spaced
     positions for a cheap feasibility check before committing to the full run.
     `per_sentence` then holds one `SentenceResult` per selected index, each still
     tagged with its true position.
+
+    `max_workers` issues each position's k rollouts concurrently (a real model
+    server batches concurrent requests far more efficiently than one at a
+    time); positions themselves are still processed one after another.
     """
     sentences = split_sentences(base_cot)
     positions = range(len(sentences)) if indices is None else indices
     baseline = _rollouts_from(
-        backend, base_prompt, "", k_baseline, seed * 1_000_000, max_tokens
+        backend, base_prompt, "", k_baseline, seed * 1_000_000, max_tokens, max_workers
     )
     baseline_dist = answer_distribution((r.answer for r in baseline), letters)
     base_answer = parse_answer(base_cot)
@@ -167,6 +204,7 @@ def analyse_cot(
             cosine_max=cosine_max,
             seed0=seed * 1_000_000 + (i + 1) * 1000,
             max_tokens=max_tokens,
+            max_workers=max_workers,
         )
         for i in positions
     )
