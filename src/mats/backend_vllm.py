@@ -16,6 +16,8 @@ installable without vLLM present; the server itself runs in the notebook.
 from __future__ import annotations
 
 import json
+import time
+import urllib.error
 import urllib.request
 from collections.abc import Callable
 
@@ -41,7 +43,11 @@ class VLLMBackend:
         temperature: float = 0.8,
         top_p: float = 0.95,
         stop: list[str] | None = None,
-        timeout: float = 120.0,
+        # Under concurrent load (max_workers > 1) a request's per-token share of
+        # throughput shrinks, so a long early-position regeneration (500-1200
+        # tokens) can take several minutes even though the server is healthy -
+        # 120s was measured too short at max_workers=16 and killed a live run.
+        timeout: float = 600.0,
         render: Callable[[str, str], str] | None = None,
     ) -> None:
         self.model = model
@@ -53,7 +59,13 @@ class VLLMBackend:
         self._render = render or _plain
 
     def complete(
-        self, prompt: str, *, prefix: str = "", seed: int, max_tokens: int = 1024
+        self,
+        prompt: str,
+        *,
+        prefix: str = "",
+        seed: int,
+        max_tokens: int = 1024,
+        retries: int = 3,
     ) -> str:
         body = {
             "model": self.model,
@@ -71,6 +83,17 @@ class VLLMBackend:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
-            payload = json.loads(response.read())
-        return payload["choices"][0]["text"]
+        # A single slow or dropped request under heavy concurrency should not
+        # kill a multi-hour run - retry transient network/timeout errors with
+        # backoff before giving up.
+        last_error: Exception | None = None
+        for attempt in range(retries):
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                    payload = json.loads(response.read())
+                return payload["choices"][0]["text"]
+            except (TimeoutError, urllib.error.URLError, ConnectionError) as error:
+                last_error = error
+                if attempt < retries - 1:
+                    time.sleep(2**attempt)
+        raise RuntimeError(f"vLLM request failed after {retries} attempts") from last_error
