@@ -75,10 +75,12 @@ def _score_cot(
 def _evaluate_condition(
     backend, embedder: Embedder, *, question: Question, cue_letter: str | None,
     no_cue_answer: str | None, cfg: Config, seed: int, groundtruth_marker: bool,
+    few_shot_prefix: str = "",
 ) -> ItemRecord:
     letters = tuple(sorted(question.options))
     prompt = build_prompt(
-        question, cue_letter=cue_letter, groundtruth_marker=groundtruth_marker
+        question, cue_letter=cue_letter, few_shot_prefix=few_shot_prefix,
+        groundtruth_marker=groundtruth_marker,
     )
     cot = backend.complete(prompt, seed=seed)
     answer = parse_answer(cot)
@@ -111,8 +113,14 @@ def _evaluate_condition(
 
 def run_experiment(
     backend, embedder: Embedder, questions: list[Question], cfg: Config,
-    *, groundtruth_marker: bool = False,
+    *, groundtruth_marker: bool = False, bias_letter: str | None = None,
+    few_shot_prefix: str = "",
 ) -> list[ItemRecord]:
+    """`bias_letter` + `few_shot_prefix` select few-shot bias mode: the cue
+    condition prepends the shared worked-examples block (whose answers are all
+    `bias_letter`) instead of an inline authority line, and the same letter is
+    the flip target for every item. Left unset, the cue is the authority line
+    and its target rotates through each question's wrong options."""
     records: list[ItemRecord] = []
     for position, question in enumerate(questions):
         seed = _seed_for(question.qid)
@@ -121,11 +129,11 @@ def run_experiment(
             no_cue_answer=None, cfg=cfg, seed=seed,
             groundtruth_marker=groundtruth_marker,
         )
-        cue_letter = cue_target(question, index=position)
+        cue_letter = bias_letter or cue_target(question, index=position)
         cue = _evaluate_condition(
             backend, embedder, question=question, cue_letter=cue_letter,
             no_cue_answer=control.subject_answer, cfg=cfg, seed=seed + 1,
-            groundtruth_marker=groundtruth_marker,
+            groundtruth_marker=groundtruth_marker, few_shot_prefix=few_shot_prefix,
         )
         records.extend([control, cue])
     return records

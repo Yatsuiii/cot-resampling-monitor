@@ -19,6 +19,8 @@ class Config:
     monitor_k: int
     n_positions: int
     max_workers: int
+    bias_letter: str   # few-shot mode: the letter every worked example answers
+    n_few_shot: int    # few-shot mode: number of worked examples in the preamble
 
 
 def load_config(path: str | Path) -> Config:
@@ -34,4 +36,6 @@ def load_config(path: str | Path) -> Config:
         monitor_k=int(data["monitor"]["k"]),
         n_positions=int(data["resample"]["n_positions"]),
         max_workers=int(data["resample"]["max_workers"]),
+        bias_letter=data["cue"]["bias_letter"],
+        n_few_shot=int(data["cue"]["n_few_shot"]),
     )
