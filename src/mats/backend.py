@@ -19,7 +19,27 @@ from __future__ import annotations
 
 import hashlib
 import re
+from dataclasses import dataclass
 from typing import Protocol
+
+
+@dataclass(frozen=True)
+class Completion:
+    """A generation plus the metadata needed to audit it.
+
+    `complete()` returns bare text, which cannot distinguish "the model stopped
+    because it finished" from "the model hit max_tokens mid-sentence" - both
+    parse as no-answer. Anything reporting an unparsable rate needs
+    `complete_detailed()` instead, so truncation can be separated from refusal.
+    """
+
+    text: str
+    finish_reason: str
+    completion_tokens: int
+
+    @property
+    def truncated(self) -> bool:
+        return self.finish_reason == "length"
 
 # The natural-language cue the prompt builder injects ("The answer key ... says
 # the answer is (X)"). Matched here because the backend only ever sees the
@@ -83,6 +103,13 @@ class DummyBackend:
         ]
         body = "\n".join(slots)
         return (body + "\n" if body else "") + f"The answer is ({answer})."
+
+    def complete_detailed(
+        self, prompt: str, *, prefix: str = "", seed: int, max_tokens: int = 2048
+    ) -> Completion:
+        """The dummy always finishes cleanly; token count is a word-count stand-in."""
+        text = self.complete(prompt, prefix=prefix, seed=seed, max_tokens=max_tokens)
+        return Completion(text=text, finish_reason="stop", completion_tokens=len(text.split()))
 
     def _fresh_answer(self, prompt: str, seed: int) -> str:
         truth = _first_group(_TRUTH, prompt) or "A"

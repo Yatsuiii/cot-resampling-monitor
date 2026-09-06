@@ -214,10 +214,20 @@ def analyse_cot(
 @dataclass(frozen=True)
 class CapitulationCurve:
     """How often a resampled continuation lands on `cue_letter`, as a function
-    of how much of the chain-of-thought is kept fixed. On a CoT that was flipped
-    by a cue, this rises from near 0 (resample early -> model re-derives its own
-    answer) to near 1 (resample late -> already committed to the cue). Where it
-    rises is where the model gave in."""
+    of how much of the chain-of-thought is kept fixed.
+
+    The hypothesis this was built to test - that a cue-flipped CoT reasons
+    correctly and then gives in at some identifiable sentence - did not hold on
+    Qwen3-4B / ARC-Challenge: measured curves were flat and already high from
+    the first probed position (see README).
+
+    Read a flat curve narrowly. It says that holding a prefix fixed does not
+    move the answer distribution relative to regenerating from scratch. It does
+    not say the reasoning is causally inert: the cue remains in the prompt at
+    every probed position, so a regenerated CoT can rebuild the same biased
+    reasoning. Separating "inert" from "reconstructible" needs a resilience
+    measurement (Thought Branches, arXiv 2510.27484 2.1.2), which this does not do.
+    """
 
     cue_letter: str
     indices: tuple[int, ...]      # sentence positions probed (0 = whole CoT resampled)
@@ -226,10 +236,17 @@ class CapitulationCurve:
 
     @property
     def capitulation_index(self) -> int | None:
-        """Probed position just after the largest single rise in `p_cue` - the
-        step across which resampling stops recovering the pre-cue answer. None
-        if `p_cue` never gets above 0.5 (no clear capitulation)."""
-        if len(self.p_cue) < 2 or self.p_cue.max() < 0.5:
+        """Probed position just after the largest single rise in `p_cue`, or
+        None when the curve shows no capitulation to locate.
+
+        Requires the curve to *start* below 0.5: if resampling the whole CoT
+        already returns the cue answer most of the time, the model was
+        committed before writing any of the reasoning and there is no
+        within-CoT transition. Without that guard this returns the largest
+        wobble of an already-high noisy curve, which reads as a sharp early
+        capitulation that is not there - it did exactly that on the real run.
+        """
+        if len(self.p_cue) < 2 or self.p_cue[0] >= 0.5 or self.p_cue.max() < 0.5:
             return None
         return int(self.indices[int(np.argmax(np.diff(self.p_cue))) + 1])
 

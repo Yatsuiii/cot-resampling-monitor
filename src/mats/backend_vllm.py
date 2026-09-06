@@ -21,6 +21,8 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 
+from mats.backend import Completion
+
 
 def _plain(prompt: str, prefix: str) -> str:
     return prompt + prefix
@@ -67,6 +69,19 @@ class VLLMBackend:
         max_tokens: int = 1024,
         retries: int = 3,
     ) -> str:
+        return self.complete_detailed(
+            prompt, prefix=prefix, seed=seed, max_tokens=max_tokens, retries=retries
+        ).text
+
+    def complete_detailed(
+        self,
+        prompt: str,
+        *,
+        prefix: str = "",
+        seed: int,
+        max_tokens: int = 1024,
+        retries: int = 3,
+    ) -> Completion:
         body = {
             "model": self.model,
             "prompt": self._render(prompt, prefix),
@@ -91,7 +106,13 @@ class VLLMBackend:
             try:
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     payload = json.loads(response.read())
-                return payload["choices"][0]["text"]
+                choice = payload["choices"][0]
+                usage = payload.get("usage") or {}
+                return Completion(
+                    text=choice["text"],
+                    finish_reason=choice.get("finish_reason") or "unknown",
+                    completion_tokens=int(usage.get("completion_tokens", 0)),
+                )
             except (TimeoutError, urllib.error.URLError, ConnectionError) as error:
                 last_error = error
                 if attempt < retries - 1:

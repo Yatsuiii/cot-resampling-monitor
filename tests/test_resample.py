@@ -4,7 +4,7 @@ by exactly one pivot sentence, so importance must concentrate there."""
 import numpy as np
 
 from mats.backend import DummyBackend
-from mats.cot import split_sentences
+from mats.cot import parse_answer, split_sentences
 from mats.embed import HashEmbedder
 from mats.prompts import Question, build_prompt
 from mats.resample import (
@@ -91,20 +91,36 @@ def test_max_workers_matches_sequential_result():
     assert sequential.per_sentence[0].importance == concurrent.per_sentence[0].importance
 
 
-def test_capitulation_curve_rises_at_the_pivot():
-    # DummyBackend: before the pivot, resampling redraws (P(cue) ~ cue_strength);
-    # once the pivot is in the prefix, the answer is locked to it.
-    backend = DummyBackend(n_steps=6, pivot=3, cue_strength=0.7)
+def _curve_for(cue_strength, seed):
+    backend = DummyBackend(n_steps=6, pivot=3, cue_strength=cue_strength)
     prompt = build_prompt(QUESTION, cue_letter="A", groundtruth_marker=True)
-    cot = backend.complete(prompt, seed=7)
+    cot = backend.complete(prompt, seed=seed)
     curve = capitulation_curve(
         backend, base_prompt=prompt, cued_cot=cot, cue_letter="A", letters=LETTERS,
         k=40, seed=1, stride=1,
     )
-    assert curve.p_cue[0] < 0.9          # early: not yet committed
+    return parse_answer(cot), curve
+
+
+def test_capitulation_curve_rises_at_the_pivot():
+    # A weak cue leaves P(cue) low while the pivot is still resampled, then the
+    # answer locks once the pivot sentence is fixed in the prefix - a genuine
+    # within-CoT transition.
+    seed = next(s for s in range(50) if _curve_for(0.3, s)[0] == "A")
+    _, curve = _curve_for(0.3, seed)
+    assert curve.p_cue[0] < 0.5          # early: not yet committed
     assert curve.p_cue[-1] == 1.0        # late: pivot fixed, locked to cue
     assert curve.capitulation_index is not None
     assert 2 <= curve.capitulation_index <= 5   # pivot sentence sits at index 3
+
+
+def test_capitulation_index_none_when_curve_starts_high():
+    # The real-run failure mode: a strong cue makes P(cue) high from the first
+    # probed position, so there is no within-CoT capitulation to locate and the
+    # largest wobble must not be reported as one.
+    _, curve = _curve_for(0.7, 7)
+    assert curve.p_cue[0] >= 0.5
+    assert curve.capitulation_index is None
 
 
 def test_capitulation_index_none_when_never_crosses():

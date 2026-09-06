@@ -1,11 +1,29 @@
 # Resampling-only unfaithfulness monitor
 
-MATS 12.0 (Neel Nanda stream) application project, Option A.
+Built for the MATS 12.0 (Neel Nanda stream) application, Option A. **Not
+submitted** - see Outcome.
 
 **Question.** When a planted cue changes a reasoning model's answer without ever
 appearing in its chain-of-thought, can black-box resampling statistics flag that
 the answer rests on an unverbalized influence - and does that beat an LLM reading
 the CoT?
+
+## Outcome
+
+The intended experiment could not be run: on Qwen3-4B / ARC-Challenge the
+positive class is empty, because a cue weak enough to stay unverbalized never
+flips the answer and a cue strong enough to flip it is always verbalized (see
+Calibration history). Two follow-up hypotheses also failed - few-shot bias
+produced no flips at all, and cue-flipped CoTs turned out to have no locatable
+capitulation point. The work was stopped rather than written up: the negative
+is real but under-powered (n=10, one 4B model, one dataset), so it cannot
+distinguish "the phenomenon is rare" from "this setup was too weak to elicit
+it".
+
+What is reusable: a tested, hardware-validated harness for sentence-level
+resampling analysis of chain-of-thought - cue injection, importance scoring,
+capitulation curves, ROC with bootstrap CIs, concurrent vLLM rollouts, and a
+Kaggle free-tier runbook. 51 tests, GPU-free smoke path.
 
 **Three detectors, one ROC.**
 
@@ -123,7 +141,65 @@ identical results (concurrency only changes wall-clock, never the output - see
    compute budget** (see "Why n_positions" above). This is the reason
    `n_positions`, `max_workers`, and a smaller `n_prompts` exist.
 
-## Known limitations (state these in the writeup)
+## Results (all three hypotheses died)
+
+1. **Unverbalized-cue detection: positive class empty.** `n_prompts=20`
+   authority-cue run: 8/10 cue items flipped to the cue letter, and 8/8 of
+   those flips named the cue in the CoT ("the answer key says C, but..."). With
+   positive = flipped AND unmentioned, `n_positive = 0` and every AUC is NaN.
+   The tradeoff behind it: an opinion cue got 0/15 flips, an authority cue got
+   8/10 but is always verbalized.
+2. **Few-shot bias: no flips.** A 3-example preamble answering (A) throughout
+   moved the answer 0/10 times. The cue condition's answer equalled the no-cue
+   answer on every item.
+3. **No capitulation point.** Resampling every 2nd sentence of the 8
+   cue-flipped CoTs and tracking P(answer == cue letter): the curves are flat
+   and already high. P(cue) with the *whole* CoT regenerated is 0.42-1.00
+   (mean 0.70), and quintile means stay within ~0.1 across the trace for 7 of
+   8 items. 2 of 8 items did not reproduce their flip, consistent with a
+   stochastic ~70% flip rate rather than a deterministic one.
+
+   What this supports: *under continued cue exposure, holding these prefixes
+   fixed did not substantially change the measured cue-answer probability
+   relative to regenerating the reasoning.* It does NOT support the stronger
+   reading that no sentence of the CoT is load-bearing - the cue stays in the
+   prompt at every probed position, so a regenerated CoT can simply rebuild
+   the same biased reasoning. Distinguishing "inert" from "reconstructible"
+   needs a resilience-style measurement (Thought Branches 2510.27484 §2.1.2):
+   remove the content and check whether it comes back. Not run here.
+
+The `capitulation_index` guard exists because of finding 3: without requiring
+the curve to start below 0.5 it reported the largest wobble of an already-high
+curve as a sharp early capitulation that was not there.
+
+## Known limitations
+
+Statistical and methodological holes found in a second-opinion review of this
+work, recorded so nobody reuses the harness without knowing them:
+
+- **Empirical TV has a positive noise floor.** `sentence_importance` compares
+  two small samples, so it reports nonzero importance even when both groups are
+  drawn from the same distribution: two independent binary samples of size 7 and
+  8 at p=0.5 have expected TV ~0.209. Small nonzero importances measured here
+  are not distinguishable from noise. A permutation null preserving the group
+  sizes is needed before reading any single value as signal.
+- **Zero events do not establish rarity.** 0/10 is consistent with an underlying
+  rate up to 25.9%, and 0/15 up to 18.1% (one-sided 95%). "Few-shot bias
+  produced no flips" bounds the rate in this setup; it does not show the effect
+  is absent.
+- **A sampled flip is not per-item causal ground truth.** Flip/no-flip on one
+  sampled trace mixes the effect with sampling noise; the right estimand is the
+  difference in answer probabilities between conditions.
+- **The timing numbers do not reconcile.** 0.429 rollouts/s predicts ~2.5h for
+  the 20-item run, which actually took 5h (effective ~0.216/s). The gap is
+  probably early-position rollouts regenerating far more tokens than the
+  single mid-CoT position the benchmark used, but that was never verified.
+- **Qwen3-8B does not fit this T4 in fp16** (~16GB of weights before KV cache),
+  contrary to an earlier note here. A larger model needs 4-bit or AWQ.
+- **"This setup is a dead zone" is an assumption, not a result.** The
+  correctness filter (>=80%) selects confident questions, and three short
+  templated few-shot examples weakly test few-shot bias. Neither isolates model
+  size as the cause.
 
 - `n_positions` sampling can miss the true pivot sentence: if none of the
   sampled positions is where the answer is actually decided, `diffuse_score`
