@@ -60,6 +60,12 @@ class ConditionRates:
     (the model genuinely never committed). Rates are over all generations, so
     cue_rate + gold_rate + unusable need not sum to 1 - a run can answer a
     third option.
+
+    `truncated` is the one to watch. A truncated generation usually still
+    parses, because the model states a tentative answer mid-reasoning before it
+    is cut off - so `unusable` stays at zero while the parsed answer stops
+    meaning "what the model concluded". `mean_tokens` is recorded alongside it
+    so the next run can set the cap from data instead of guessing.
     """
 
     n: int
@@ -67,6 +73,7 @@ class ConditionRates:
     gold_rate: float
     unusable: float
     truncated: float
+    mean_tokens: float = 0.0
 
     @staticmethod
     def of(
@@ -79,6 +86,7 @@ class ConditionRates:
         n = len(rows)
         cue_hits = sum(a == cue_letter for a in answers) if cue_letter else 0
         return ConditionRates(
+            mean_tokens=sum(c.completion_tokens for c in rows) / n,
             n=n,
             cue_rate=cue_hits / n,
             gold_rate=sum(a == gold for a in answers) / n,

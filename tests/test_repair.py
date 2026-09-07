@@ -164,3 +164,12 @@ def test_dose_response_handles_a_flat_variable():
     out = dose_response(results, draws=500)
     assert out["r"] is None
     assert out["fully_repaired"] == 5
+
+
+def test_rates_record_mean_tokens_for_setting_the_next_cap():
+    rows = _completions(["A", "C"])
+    rows = [
+        Completion(text=r.text, finish_reason=r.finish_reason, completion_tokens=n)
+        for r, n in zip(rows, (100, 300))
+    ]
+    assert ConditionRates.of(rows, cue_letter="A", gold="C").mean_tokens == 200.0
