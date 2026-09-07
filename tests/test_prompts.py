@@ -21,6 +21,13 @@ def test_cue_target_rotates_over_wrong_options():
     assert cue_target(Q, index=2) == "D"
 
 
+def test_note_is_appended_without_a_cue():
+    prompt = build_prompt(Q, note="The answer key is unreliable.")
+    assert "The answer key is unreliable." in prompt
+    assert "says the answer is" not in prompt  # no cue line came along with it
+    assert prompt.rstrip().endswith("Reasoning:")
+
+
 def test_few_shot_block_repeats_example_golds():
     examples = [
         Question("e1", "?", {"A": "x", "B": "y"}, gold="A"),
