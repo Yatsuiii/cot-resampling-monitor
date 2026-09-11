@@ -70,8 +70,11 @@ def _backend():
             tokenize=False, add_generation_prompt=True)
         return text + prefix
 
+    # max_tokens is a per-CALL argument on complete(), not a constructor one;
+    # passing it here is what crashed the first GPU kernel. It reaches the model
+    # through run_cell instead.
     return VLLMBackend(model=MODEL, temperature=0.8, top_p=0.95,
-                       stop=["<|im_end|>"], render=render, max_tokens=MAX_TOKENS)
+                       stop=["<|im_end|>"], render=render)
 
 
 def sweep(backend, out: pathlib.Path, *, datasets=DATASETS, families=FAMILIES,
@@ -104,7 +107,8 @@ def sweep(backend, out: pathlib.Path, *, datasets=DATASETS, families=FAMILIES,
             try:
                 fam = family(name)
                 traces = run_cell(backend, questions, fam, dataset=dataset,
-                                  model=MODEL, bias_letter=bias_letter, seed=seed)
+                                  model=MODEL, bias_letter=bias_letter, seed=seed,
+                                  max_tokens=MAX_TOKENS)
             except Exception as exc:
                 # H30: one unbuildable family must not abort a grid costing
                 # GPU-hours. Record it and keep going.
