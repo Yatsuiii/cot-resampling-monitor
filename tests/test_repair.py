@@ -59,6 +59,16 @@ def test_rates_separate_truncation_from_refusal():
     assert rates.truncated == 0.5
 
 
+def test_rates_do_not_treat_a_truncated_tentative_answer_as_final():
+    rates = ConditionRates.of(
+        _completions(["A"], truncated={0}), cue_letter="A", gold="C"
+    )
+    assert rates.cue_rate == 0.0
+    assert rates.gold_rate == 0.0
+    assert rates.unusable == 1.0
+    assert rates.truncated == 1.0
+
+
 def test_rates_of_nothing_is_all_zero():
     assert ConditionRates.of([], cue_letter="A", gold="C").n == 0
 
@@ -122,6 +132,8 @@ def test_run_question_covers_all_four_policies_without_a_gpu():
     assert result.cue_effect > 0
     # the donor is a real prefix taken from the first cued generation
     assert result.donor_prefix and result.donor_prefix in result.donor_text
+    assert set(result.completions) == set(result.rates)
+    assert all(len(rows) == 4 for rows in result.completions.values())
 
 
 def test_run_question_donor_is_the_first_cued_trace_not_a_flipped_one():

@@ -1,0 +1,22 @@
+# Fixed Phase-1 cohort from the v2 calibration run. Keeping this cohort makes
+# the clean run a direct continuation; clean accuracy is still measured anew.
+Mercury_7097318
+Mercury_7158673
+Mercury_7038273
+ACTAAP_2010_5_10
+VASoL_2008_5_28
+Mercury_177818
+NYSEDREGENTS_2014_8_12
+Mercury_7139790
+MCAS_2003_8_25
+Mercury_7003955
+Mercury_176838
+Mercury_SC_407314
+Mercury_SC_400845
+Mercury_7245193
+Mercury_7068863
+NCEOGA_2013_8_38
+Mercury_7090720
+MCAS_2006_9_35
+Mercury_7144795
+Mercury_SC_LBS10915

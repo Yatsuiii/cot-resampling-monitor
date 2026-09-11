@@ -27,8 +27,9 @@ from __future__ import annotations
 import random
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from mats.backend import Completion
 from mats.cot import parse_answer, split_sentences
 from mats.prompts import Question, build_prompt
 
@@ -55,11 +56,13 @@ def halfway_prefix(cot: str) -> str:
 class ConditionRates:
     """Outcome rates for one condition on one question.
 
-    `unusable` is the share of generations with no parseable answer, split into
-    `truncated` (hit the token cap, a fixable config problem) and the rest
-    (the model genuinely never committed). Rates are over all generations, so
-    cue_rate + gold_rate + unusable need not sum to 1 - a run can answer a
-    third option.
+    `unusable` is the share of generations with no valid final answer, split
+    into `truncated` (hit the token cap, a fixable config problem) and the rest
+    (the model genuinely never committed). A length-terminated completion is
+    never parsed as an answer: models often state a tentative choice before
+    correcting themselves, so accepting it would turn a parser artifact into
+    evidence. Rates are over all generations, so cue_rate + gold_rate +
+    unusable need not sum to 1 - a run can answer a third option.
 
     `truncated` is the one to watch. A truncated generation usually still
     parses, because the model states a tentative answer mid-reasoning before it
@@ -82,7 +85,7 @@ class ConditionRates:
         rows = list(completions)
         if not rows:
             return ConditionRates(0, 0.0, 0.0, 0.0, 0.0)
-        answers = [parse_answer(c.text) for c in rows]
+        answers = [None if c.truncated else parse_answer(c.text) for c in rows]
         n = len(rows)
         cue_hits = sum(a == cue_letter for a in answers) if cue_letter else 0
         return ConditionRates(
@@ -106,6 +109,9 @@ class QuestionResult:
     donor_prefix: str
     donor_text: str
     rates: dict[str, ConditionRates]
+    # Retain the raw completions so a result can be audited for truncation and
+    # parser mistakes rather than relying on aggregate rates alone.
+    completions: dict[str, tuple[Completion, ...]] = field(default_factory=dict)
 
     @property
     def cue_effect(self) -> float:
@@ -183,6 +189,12 @@ def run_question(
             "cued": rate(cued),
             "source_removal": rate(removal),
             "explicit_correction": rate(correction),
+        },
+        completions={
+            "clean": tuple(clean),
+            "cued": tuple(cued),
+            "source_removal": tuple(removal),
+            "explicit_correction": tuple(correction),
         },
     )
 
