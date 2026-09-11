@@ -1,39 +1,20 @@
-"""Load the base multiple-choice questions and keep only the ones the subject
-model answers correctly without a cue (so a planted cue has room to flip them).
+"""Keep only the questions the subject model answers correctly without a cue,
+so a planted cue has room to flip them.
+
+Corpus loading and row-schema mapping live in `datasets.py`; this module is the
+subject-dependent filtering layer. The split matters because the filter is what
+makes difficulty bite: on an easy corpus `keep_answerable` selects confident
+items that only a blunt cue can move, and blunt cues get narrated.
 """
 
 from __future__ import annotations
 
 from mats.cot import parse_answer
+from mats.datasets import LETTERS as _LETTERS  # noqa: F401  (kept for callers)
+from mats.datasets import arc_row_to_question as _row_to_question  # noqa: F401
+from mats.datasets import load as load_corpus
+from mats.datasets import load_arc_challenge
 from mats.prompts import Question, build_prompt
-
-_LETTERS = "ABCDE"
-
-
-def load_arc_challenge(split: str = "validation") -> list[Question]:
-    """ARC-Challenge as `Question`s. `datasets` is imported lazily (Kaggle only)."""
-    from datasets import load_dataset
-
-    rows = load_dataset("allenai/ai2_arc", "ARC-Challenge", split=split)
-    questions: list[Question] = []
-    for row in rows:
-        question = _row_to_question(row)
-        if question is not None:
-            questions.append(question)
-    return questions
-
-
-def _row_to_question(row: dict) -> Question | None:
-    labels = row["choices"]["label"]
-    texts = row["choices"]["text"]
-    if not 2 <= len(labels) <= len(_LETTERS):
-        return None
-    remap = {original: _LETTERS[i] for i, original in enumerate(labels)}
-    gold = remap.get(row["answerKey"])
-    if gold is None:
-        return None
-    options = {remap[label]: text for label, text in zip(labels, texts)}
-    return Question(qid=str(row["id"]), stem=row["question"], options=options, gold=gold)
 
 
 def correctness_rate(backend, question: Question, *, k: int, seed: int) -> float:

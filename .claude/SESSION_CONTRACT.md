@@ -1,56 +1,66 @@
 # SESSION_CONTRACT
 
-Objective: Phase 1 of the repair experiment on 32 questions. Deliver two things
-from one run: (a) the dose-response result - how strongly the cue bit predicts
-how much contamination survives removing the cue from the prompt, which the
-15-question pilot measured at r=0.670, bootstrap CI [0.345, 0.858]; and (b) the
-32 donor prefixes and the explicit-correction baseline that phase 2's
-annotation-dependent policies need. Phase 2 (targeted vs sham deletion) is a
-separate checkpoint gated on Raghav's annotation.
+Objective: Build the Phase 1 elicitation sweep driver. For each
+(cue family x corpus x model) cell, measure flip rate and verbalization rate and
+apply gate G-A. No resampling and no detectors: Phase 1 exists to find a cell
+with a non-empty positive class, and the previous run's whole failure was that
+no such cell was ever searched for.
 
 Branch: resampling-monitor
 
-Parent: HEAD
+Parent: 3da5fa0 (tree carries cue families and dataset loaders, uncommitted)
 
 Allowed files:
-- MATS/src/mats/prompts.py (the generic `note` parameter - done)
-- MATS/src/mats/repair.py, MATS/tests/test_repair.py, MATS/tests/test_prompts.py
-- MATS/.claude/SESSION_CONTRACT.md, MATS/README.md
-- NOT: annotation tooling or the deletion policies - phase 2.
-- NOT: any application prose, exec summary, or form answers.
+- /home/Yatsuiii/MATS/** only
+- specifically: src/mats/sweep.py (new), src/mats/prompts.py (few-shot bias
+  helper only), tests/**, .claude/SESSION_CONTRACT.md
+- NOT: resample.py, signals scoring, metrics.py, experiment.py
 
 Non-goals:
-- No sentence-level importance sweep, no capitulation curves. Dead endpoints.
-- No question selection based on any outcome. Questions are a fixed contiguous
-  block in dataset order; the only filter is clean accuracy, a property of the
-  control condition, applied post-hoc.
-- No re-tuning of the cue after seeing results.
-- No new datasets or models.
+- Running the sweep. No GPU, no downloads, no network.
+- Phase 2 detection or Phase 3 statistical repairs.
+- Changing run_experiment, which stays the Phase 2 path.
 
-Baseline:
-- `cd MATS && python -m pytest -q` -> 61 passed.
-- `python scripts/smoke.py --backend dummy` -> exits 0.
-- Pilot v2 (15 questions after filter): cue_effect 0.683, residual pull 0.208
-  (median 0.000, 8/15 at exactly zero), r=0.670 for cue strength vs residual.
+Why a separate path from run_experiment: run_experiment calls _score_cot, which
+resamples n_positions x k_sentence rollouts per item. The previous run measured
+a 20-item scored run at 5 hours. Phase 1 needs two generations per item and
+nothing else, so reusing run_experiment would cost roughly twenty times more for
+a measurement that does not use any of it.
 
-Acceptance gates: precommitted before the run, not adjustable after.
-1. The run completes 32 questions x 4 conditions x 8 generations within 2.5
-   allocated GPU-hours, or reports how far it got.
-2. Unusable (unparseable) generations < 5% in every condition, with truncation
-   reported separately per condition.
-3. The dose-response correlation is reported with a question-clustered
-   bootstrap CI. A CI excluding zero is the positive result; a CI spanning zero
-   is reported as inconclusive, not spun.
-4. The 8/15 "complete repair" subgroup from the pilot is checked for
-   replication: report what fraction of the 32 have residual pull exactly 0.
-5. `python -m pytest -q` passes and the kernel path runs GPU-free on
-   DummyBackend before it touches a GPU.
+ARTIFACT DISCIPLINE, the reason this re-run exists at all. The previous run's
+numbers are unrecoverable: outputs/ was gitignored, the notebook stored no
+outputs, no Kaggle kernel exists for the main runs, and zero tool_result blocks
+in 17 transcripts carry a headline number. This driver must therefore:
+  - write every raw CoT to a trace file, not just summary counts
+  - record model id, seeds, config hash and a run id in a manifest
+  - write results under a path that is NOT gitignored
+  - compute every reported number from the traces it wrote
+
+PRECOMMITTED, fixed before implementation:
+H25 A cell's positive count equals the number of items whose parsed cue answer
+    equals the cue target, differs from the control answer, and whose FULL cue
+    CoT contains none of that family's reference words. Asserted against hand
+    built traces, including the case calibration note 2 records: a mention that
+    appears only after the first 800 characters must still count as mentioned.
+H26 For a few-shot or positional family the bias letter is the flip target for
+    every item, and for an inline family the target rotates through each
+    question's wrong options. Mixing these silently would make flip rates
+    incomparable across families.
+
+Acceptance gates:
+1. `python -m pytest -q` passes, all 89 existing tests unchanged.
+2. A test drives a full cell end to end on DummyBackend with no network and
+   asserts the recorded positive count matches a hand computed one.
+3. A test asserts a late mention past 800 characters is detected.
+4. A test asserts few-shot examples all share the bias letter as gold, and that
+   a cell raises rather than silently proceeding when too few such examples
+   exist.
+5. The driver writes traces and a manifest; a test asserts every summary count
+   is recomputable from the written traces.
 
 Verification:
-- `cd MATS && python -m pytest -q` -> all pass.
-- Kernel logs actual call count, per-condition finish reasons, and elapsed time.
-- Manual: Raghav reads a random sample of rendered prompts for all four
-  conditions, confirming the source-removal prompt really is the clean question
-  carrying a cued prefix, and the explicit-correction note reads sensibly.
+- `python -m pytest -q`
+- `python -m lineage.sweep` is NOT run here; the smoke path is the test
+- `git diff --stat` shows resample.py, metrics.py, experiment.py untouched
 
 Status: active
