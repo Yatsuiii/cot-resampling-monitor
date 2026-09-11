@@ -1,52 +1,52 @@
 # SESSION_CONTRACT
 
-Objective: Add the Phase 1 CLI so the elicitation sweep can actually run. It
-iterates the cue-family x corpus grid, filters questions to those the subject
-answers correctly, writes traces and a manifest, and reports gate G-A per cell.
-Last piece before Phase 1 executes.
+Objective: A Kaggle runner for the Phase 1 sweep, so the grid can execute on a
+free T4. Follows the lifecycle already proven in scripts/repair_clean_kaggle.py:
+start vLLM, wait for health, render through the model's chat template, and write
+partial output after every cell so a killed session still leaves evidence.
 
 Branch: resampling-monitor
 
-Parent: 40b4535
+Parent: e6fd72a
 
 Allowed files:
 - /home/Yatsuiii/MATS/** only
-- specifically: scripts/sweep_phase1.py (new), src/mats/sweep.py (cell-runner
-  glue only), tests/**, .claude/SESSION_CONTRACT.md
-- NOT: resample.py, signals scoring, metrics.py, experiment.py, repair.py
+- specifically: scripts/sweep_phase1_kaggle.py (new), tests/**,
+  .claude/SESSION_CONTRACT.md
+- NOT: src/mats/** (the library is done for Phase 1), resample.py, metrics.py,
+  experiment.py, repair.py, scripts/repair_clean_kaggle.py
 
 Non-goals:
-- Running against a real model here. No GPU on this machine and no vLLM; the
-  local path is DummyBackend only. The real run goes to Kaggle or a rented GPU.
-- Phase 2 detection or Phase 3 statistical repairs.
-- Making any repository public.
+- Running it. No GPU here; the local check is import and argument handling only.
+- Phase 2 or Phase 3.
+- Changing the sweep library, which is committed and tested at e6fd72a.
 
-Baseline at 40b4535: 97 tests. cues.py, datasets.py and sweep.py exist;
-run_cell and summarise work; nothing iterates the grid or writes to disk.
+Carried over from repair_clean_kaggle.py because it is already proven on this
+hardware: _wait_ready polling on /health, atexit server termination,
+float16 with max-model-len 6144 and gpu-memory-utilization 0.92 on a single T4,
+chat-template rendering via AutoTokenizer, and partial output after each unit of
+work. That last one matters most - a Kaggle session that dies at hour four must
+not lose the first three.
 
 PRECOMMITTED, fixed before implementation:
-H27 A cell that cannot deliver its cue fails loudly rather than reporting a
-    zero flip rate. Specifically, a few-shot family with too few bias-letter
-    examples raises, and that raise is recorded in the results file as a failed
-    cell rather than silently omitted.
-H28 Every number in the summary file is recomputable from the traces written
-    beside it. Asserted by a test that reloads traces and recomputes.
+H29 Partial output is written after every cell, not at the end. A session killed
+    mid-grid leaves a summary containing the cells that finished and their trace
+    files, and the summary is recomputable from those traces.
+H30 A cell that raises is recorded in failed_cells and the run continues. One
+    unbuildable family must not abort a grid that costs GPU-hours.
 
 Acceptance gates:
-1. `python -m pytest -q` passes; all 97 existing tests unchanged.
-2. `python scripts/sweep_phase1.py --backend dummy --n 8` runs end to end with
-   no network, writing results/phase1/<run_id>/ containing a manifest, one
-   trace file per cell, and a summary.
-3. The summary records, per cell: n_items, n_flipped, n_positive,
-   verbalization rate given flip, and passes_G_A.
-4. A test asserts H27 and a test asserts H28.
-5. results/ is not gitignored; traces are written there and committed by the
-   caller, not excluded.
+1. `python -m pytest -q` passes; all 100 existing tests unchanged.
+2. The script imports without vLLM, transformers or a GPU present, so a syntax
+   or import error surfaces here rather than after a Kaggle queue wait.
+3. A test asserts the cell-loop writes partial state after each cell, driven on
+   DummyBackend with no server.
+4. Model, token caps, workers and grid are environment-overridable, matching how
+   repair_clean_kaggle.py is parameterised.
 
 Verification:
 - `python -m pytest -q`
-- `python scripts/sweep_phase1.py --backend dummy --n 8` twice; the second run
-  writes a new run_id and both summaries are recomputable from their traces
-- `git diff --stat` shows the Phase 2 scoring path untouched
+- `python -c "import ast; ast.parse(open('scripts/sweep_phase1_kaggle.py').read())"`
+- `git diff --stat src/mats` is empty
 
 Status: active
