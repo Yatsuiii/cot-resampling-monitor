@@ -129,11 +129,32 @@ def sweep(backend, out: pathlib.Path, *, datasets=DATASETS, families=FAMILIES,
     return state
 
 
+def find_package_root() -> pathlib.Path:
+    """Directory to place on sys.path, found rather than assumed.
+
+    Kaggle auto-extracts an uploaded zip and mounts land at a version-dependent
+    path, so hardcoding either fails. Searching for mats/__init__.py works in
+    every arrangement; the zip fallback covers an image that does not extract.
+    On failure the error lists what was actually there, so the next attempt is
+    diagnosable instead of blind.
+    """
+    for base in (pathlib.Path("/kaggle/input"), pathlib.Path("/kaggle/working")):
+        if not base.is_dir():
+            continue
+        for init in base.rglob("mats/__init__.py"):
+            return init.parent.parent
+    import zipfile
+    for archive in pathlib.Path("/kaggle/input").rglob("*.zip"):
+        zipfile.ZipFile(archive).extractall("/kaggle/working")
+        for init in pathlib.Path("/kaggle/working").rglob("mats/__init__.py"):
+            return init.parent.parent
+    seen = sorted(str(p) for p in pathlib.Path("/kaggle/input").rglob("*"))[:40]
+    raise RuntimeError("no mats package found; /kaggle/input holds:\n  "
+                       + "\n  ".join(seen))
+
+
 def main() -> None:
-    repo = pathlib.Path("/kaggle/working/MATS")
-    if not (repo / "src" / "mats").is_dir():
-        raise RuntimeError(f"missing source package at {repo / 'src' / 'mats'}")
-    sys.path.insert(0, str(repo / "src"))
+    sys.path.insert(0, str(find_package_root()))
 
     _start_server()
     state = sweep(_backend(), pathlib.Path("/kaggle/working/phase1"))
