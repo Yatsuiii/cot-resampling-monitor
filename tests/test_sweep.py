@@ -106,3 +106,68 @@ def test_manifest_identifies_the_run():
     assert m["model"] == "Qwen/Qwen3-4B" and m["config_hash"] == "abc123"
     assert m["seed"] == 7 and len(m["run_id"]) == 16
     assert m["min_positives_gate"] == 15
+
+
+def _run_cli(tmp, *extra):
+    """Drive the Phase 1 CLI in-process, writing into a temp dir so smoke runs
+    never pollute the committed results tree."""
+    import runpy
+    import sys
+    argv = sys.argv
+    sys.argv = ["sweep_phase1.py", "--backend", "dummy", "--out", str(tmp), *extra]
+    try:
+        runpy.run_path("scripts/sweep_phase1.py", run_name="__main__")
+    except SystemExit as exc:
+        assert exc.code == 0
+    finally:
+        sys.argv = argv
+
+
+def _latest_run(root) -> Path:
+    runs = sorted(Path(root).glob("*/summary.json"), key=lambda p: p.stat().st_mtime)
+    assert runs, "no phase1 run written"
+    return runs[-1].parent
+
+
+def test_cli_writes_manifest_traces_and_summary():
+    with tempfile.TemporaryDirectory() as tmp:
+        _run_cli(tmp, "--n", "8")
+        run = _latest_run(tmp)
+        summary = json.loads((run / "summary.json").read_text())
+        assert summary["manifest"]["model"] == "dummy"
+        assert len(summary["manifest"]["run_id"]) == 16
+        assert summary["cells"], "no cell recorded"
+        for key, cell in summary["cells"].items():
+            assert (run / cell["traces_file"]).exists(), key
+            for f in ("n_items", "n_flipped", "n_positive",
+                      "verbalization_rate_given_flip", "passes_G_A"):
+                assert f in cell, (key, f)
+
+
+def test_a_cell_that_cannot_deliver_its_cue_is_recorded_as_failed():
+    """H27. With 8 synthetic questions only 2 have gold 'A', so a few-shot block
+    cannot be built. That must surface as a failure, never as a zero flip rate
+    which would read as evidence the family does not work."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _run_cli(tmp, "--n", "8")
+        summary = json.loads((_latest_run(tmp) / "summary.json").read_text())
+        failed = summary["failed_cells"]
+        assert "synthetic__few_shot" in failed
+        assert "would not be planted" in failed["synthetic__few_shot"]["error"]
+        assert "synthetic__few_shot" not in summary["cells"], "failed cell leaked"
+
+
+def test_every_summary_count_is_recomputable_from_its_traces():
+    """H28. If this fails a reported number has become unauditable, which is
+    exactly how the previous run's results were lost."""
+    from mats.cues import family as get_family
+    with tempfile.TemporaryDirectory() as tmp:
+        _run_cli(tmp, "--n", "8")
+        run = _latest_run(tmp)
+        summary = json.loads((run / "summary.json").read_text())
+        assert summary["cells"], "nothing to recompute"
+        for key, cell in summary["cells"].items():
+            fam = get_family(key.split("__", 1)[1])
+            recomputed = summarise(read_traces(run / cell["traces_file"]), fam)
+            for f, value in recomputed.items():
+                assert cell[f] == value, (key, f, cell[f], value)
