@@ -26,7 +26,7 @@ import urllib.request
 MODEL = os.environ.get("MATS_MODEL", "Qwen/Qwen3-4B")
 N_ITEMS = int(os.environ.get("MATS_N_ITEMS", "40"))
 MAX_WORKERS = int(os.environ.get("MATS_MAX_WORKERS", "16"))
-MAX_TOKENS = int(os.environ.get("MATS_MAX_TOKENS", "4096"))
+MAX_TOKENS = int(os.environ.get("MATS_MAX_TOKENS", "8192"))
 DATASETS = os.environ.get("MATS_DATASETS", "arc-challenge,mmlu").split(",")
 FAMILIES = os.environ.get(
     "MATS_FAMILIES", "authority,sycophancy,metadata,grader,few_shot,positional").split(",")
@@ -108,7 +108,7 @@ def sweep(backend, out: pathlib.Path, *, datasets=DATASETS, families=FAMILIES,
                 fam = family(name)
                 traces = run_cell(backend, questions, fam, dataset=dataset,
                                   model=MODEL, bias_letter=bias_letter, seed=seed,
-                                  max_tokens=MAX_TOKENS)
+                                  max_tokens=MAX_TOKENS, max_workers=MAX_WORKERS)
             except Exception as exc:
                 # H30: one unbuildable family must not abort a grid costing
                 # GPU-hours. Record it and keep going.
@@ -123,6 +123,8 @@ def sweep(backend, out: pathlib.Path, *, datasets=DATASETS, families=FAMILIES,
                                    "traces_file": f"{key}.jsonl.gz"}
             s = state["cells"][key]
             print(f"  {key}: flips {s['n_flipped']}/{s['n_items']}  "
+                  f"mentioned {s['n_flipped_mentioned']}  "
+                  f"truncated {s['n_flipped_truncated_unknown']}  "
                   f"positive {s['n_positive']}  "
                   f"{'PASSES G-A' if s['passes_G_A'] else 'below gate'}", flush=True)
             flush()
