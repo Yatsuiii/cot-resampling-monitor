@@ -100,7 +100,8 @@ def sweep(backend, out: pathlib.Path, *, datasets=DATASETS, families=FAMILIES,
     for dataset in datasets:
         pool = load(dataset)
         questions = keep_answerable(backend, pool, threshold=correct_threshold,
-                                    k=4, seed=seed, limit=n_items)
+                                    k=4, seed=seed, limit=n_items,
+                                    max_tokens=MAX_TOKENS, max_workers=MAX_WORKERS)
         print(f"[{dataset}] {len(questions)} answerable of {len(pool)}", flush=True)
         for name in families:
             key = f"{dataset}__{name}"

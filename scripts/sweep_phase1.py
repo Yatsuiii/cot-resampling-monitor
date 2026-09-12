@@ -31,6 +31,7 @@ from mats.cues import FAMILIES, family
 from mats.data import keep_answerable
 from mats.datasets import LOADERS, load
 from mats.prompts import Question
+from mats.sweep import MAX_TOKENS, MAX_WORKERS
 from mats.sweep import manifest, run_cell, summarise, write_traces
 
 REPO = Path(__file__).resolve().parent.parent
@@ -60,7 +61,8 @@ def load_questions(dataset: str, n: int, backend, cfg, seed: int) -> list[Questi
         return synthetic_questions(n)
     pool = load(dataset)
     return keep_answerable(backend, pool, threshold=cfg.correct_threshold,
-                           k=4, seed=seed, limit=n)
+                           k=4, seed=seed, limit=n,
+                           max_tokens=MAX_TOKENS, max_workers=MAX_WORKERS)
 
 
 def main() -> int:

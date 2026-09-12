@@ -1,52 +1,60 @@
 # SESSION_CONTRACT
 
-Objective: A Kaggle runner for the Phase 1 sweep, so the grid can execute on a
-free T4. Follows the lifecycle already proven in scripts/repair_clean_kaggle.py:
-start vLLM, wait for health, render through the model's chat template, and write
-partial output after every cell so a killed session still leaves evidence.
+Objective: Fix the two defects in keep_answerable that made the full grid run
+6+ hours and biased its item selection. Parallelise both of its loops, and
+thread max_tokens through so the filter generates under the same cap as the
+cells it feeds.
 
 Branch: resampling-monitor
 
-Parent: e6fd72a
+Parent: 7f67201
 
 Allowed files:
 - /home/Yatsuiii/MATS/** only
-- specifically: scripts/sweep_phase1_kaggle.py (new), tests/**,
-  .claude/SESSION_CONTRACT.md
-- NOT: src/mats/** (the library is done for Phase 1), resample.py, metrics.py,
-  experiment.py, repair.py, scripts/repair_clean_kaggle.py
+- src/mats/data.py, scripts/sweep_phase1_kaggle.py, scripts/sweep_phase1.py,
+  tests/**, .claude/SESSION_CONTRACT.md
+- NOT: resample.py, signals scoring, metrics.py, experiment.py, repair.py
 
 Non-goals:
-- Running it. No GPU here; the local check is import and argument handling only.
-- Phase 2 or Phase 3.
-- Changing the sweep library, which is committed and tested at e6fd72a.
+- Changing the sweep, cue families, or detectors.
+- Re-running anything here. No GPU on this machine.
 
-Carried over from repair_clean_kaggle.py because it is already proven on this
-hardware: _wait_ready polling on /health, atexit server termination,
-float16 with max-model-len 6144 and gpu-memory-utilization 0.92 on a single T4,
-chat-template rendering via AutoTokenizer, and partial output after each unit of
-work. That last one matters most - a Kaggle session that dies at hour four must
-not lose the first three.
+The two defects, both in one function I never opened:
 
-PRECOMMITTED, fixed before implementation:
-H29 Partial output is written after every cell, not at the end. A session killed
-    mid-grid leaves a summary containing the cells that finished and their trace
-    files, and the summary is recomputable from those traces.
-H30 A cell that raises is recorded in failed_cells and the run continues. One
-    unbuildable family must not abort a grid that costs GPU-hours.
+1. SPEED. keep_answerable loops over questions sequentially, and
+   correctness_rate loops over its k rollouts sequentially inside that. It takes
+   no max_workers. Finding 40 answerable items may scan 50-100 questions at 4
+   generations each, per dataset, entirely serial. That runs BEFORE any cell, so
+   the ThreadPoolExecutor added to run_cell never got reached.
+
+2. CORRECTNESS, and this is the worse one. The filter calls
+   backend.complete(prompt, seed=...) with no max_tokens, taking the 1024
+   default, while the cells run at 8192. Measured chains are 5,589-9,719
+   characters, well over 1024 tokens. So the filter truncates most of its own
+   rollouts and marks items unanswerable because the chain was cut off rather
+   than because the model was wrong. It selects for short-reasoning questions
+   and biases the entire grid.
+
+Defect 2 is the same truncation bug class already fixed at the answer boundary
+and the mention boundary. I fixed those two where they reproduced and did not
+read the rest of the file.
+
+PRECOMMITTED:
+H31 Parallelising must not change which questions are kept. With a fixed
+    backend and seed, the kept list is identical for max_workers 1 and 16, and
+    in the same order.
+H32 The filter's max_tokens reaches backend.complete. Asserted by a recording
+    backend that captures the kwargs it was called with.
 
 Acceptance gates:
-1. `python -m pytest -q` passes; all 100 existing tests unchanged.
-2. The script imports without vLLM, transformers or a GPU present, so a syntax
-   or import error surfaces here rather than after a Kaggle queue wait.
-3. A test asserts the cell-loop writes partial state after each cell, driven on
-   DummyBackend with no server.
-4. Model, token caps, workers and grid are environment-overridable, matching how
-   repair_clean_kaggle.py is parameterised.
+1. `python -m pytest -q` passes; all 108 existing tests unchanged.
+2. A test asserts H31 across the early-stopping boundary, since `limit` makes
+   order matter.
+3. A test asserts H32.
+4. The runner passes both max_tokens and max_workers into keep_answerable.
 
 Verification:
 - `python -m pytest -q`
-- `python -c "import ast; ast.parse(open('scripts/sweep_phase1_kaggle.py').read())"`
-- `git diff --stat src/mats` is empty
+- `git diff --stat` shows resample.py, metrics.py, experiment.py untouched
 
 Status: active
