@@ -25,8 +25,11 @@ import urllib.request
 
 MODEL = os.environ.get("MATS_MODEL", "Qwen/Qwen3-4B")
 N_ITEMS = int(os.environ.get("MATS_N_ITEMS", "40"))
-MAX_WORKERS = int(os.environ.get("MATS_MAX_WORKERS", "16"))
-MAX_TOKENS = int(os.environ.get("MATS_MAX_TOKENS", "8192"))
+# Room left for the prompt once the generation cap is subtracted from the
+# context window. Measured over the real corpora with the repo's own row
+# adapters: the largest prompt this grid can build is the 3-shot few_shot cell
+# on MMLU at 5,843 characters, ~1,950 tokens at a conservative 3 chars/token.
+PROMPT_RESERVE = 3072
 DATASETS = os.environ.get("MATS_DATASETS", "arc-challenge,mmlu").split(",")
 FAMILIES = os.environ.get(
     "MATS_FAMILIES", "authority,sycophancy,metadata,grader,few_shot,positional").split(",")
@@ -46,11 +49,18 @@ def _wait_ready(url: str = "http://localhost:8000/health", timeout: int = 900) -
     raise RuntimeError("vLLM server did not come up")
 
 
-def _start_server():
+def _start_server(max_model_len: int):
+    """Size the window to the caller's generation cap.
+
+    vLLM rejects any request whose max_tokens exceeds the context window, so
+    the cap and the window are one decision. Holding them as two independent
+    literals is what made every completion in the first full grid a 400.
+    """
     server = subprocess.Popen([
         sys.executable, "-m", "vllm.entrypoints.openai.api_server",
         "--model", MODEL, "--dtype", "float16", "--tensor-parallel-size", "1",
-        "--max-model-len", "6144", "--gpu-memory-utilization", "0.92",
+        "--max-model-len", str(max_model_len),
+        "--gpu-memory-utilization", "0.92",
     ])
     atexit.register(server.terminate)
     _wait_ready()
@@ -77,9 +87,9 @@ def _backend():
                        stop=["<|im_end|>"], render=render)
 
 
-def sweep(backend, out: pathlib.Path, *, datasets=DATASETS, families=FAMILIES,
-          n_items=N_ITEMS, seed=SEED, bias_letter=BIAS_LETTER,
-          correct_threshold=CORRECT_THRESHOLD) -> dict:
+def sweep(backend, out: pathlib.Path, *, max_tokens: int, max_workers: int,
+          datasets=DATASETS, families=FAMILIES, n_items=N_ITEMS, seed=SEED,
+          bias_letter=BIAS_LETTER, correct_threshold=CORRECT_THRESHOLD) -> dict:
     """The grid loop. Writes summary.json after EVERY cell, so a killed session
     leaves the cells that finished rather than nothing at all."""
     from mats.cues import family
@@ -101,7 +111,7 @@ def sweep(backend, out: pathlib.Path, *, datasets=DATASETS, families=FAMILIES,
         pool = load(dataset)
         questions = keep_answerable(backend, pool, threshold=correct_threshold,
                                     k=4, seed=seed, limit=n_items,
-                                    max_tokens=MAX_TOKENS, max_workers=MAX_WORKERS)
+                                    max_tokens=max_tokens, max_workers=max_workers)
         print(f"[{dataset}] {len(questions)} answerable of {len(pool)}", flush=True)
         for name in families:
             key = f"{dataset}__{name}"
@@ -109,7 +119,7 @@ def sweep(backend, out: pathlib.Path, *, datasets=DATASETS, families=FAMILIES,
                 fam = family(name)
                 traces = run_cell(backend, questions, fam, dataset=dataset,
                                   model=MODEL, bias_letter=bias_letter, seed=seed,
-                                  max_tokens=MAX_TOKENS, max_workers=MAX_WORKERS)
+                                  max_tokens=max_tokens, max_workers=max_workers)
             except Exception as exc:
                 # H30: one unbuildable family must not abort a grid costing
                 # GPU-hours. Record it and keep going.
@@ -160,11 +170,36 @@ def find_package_root() -> pathlib.Path:
                        + "\n  ".join(seen))
 
 
+def _preflight(backend, max_tokens: int, max_model_len: int) -> None:
+    """Prove the server accepts a request at the cap, before spending on data.
+
+    The corpus filter is the first thing that generates, so a rejected cap
+    surfaces as an empty answerable set tens of minutes in. One request here
+    turns that into a message naming both numbers.
+    """
+    try:
+        backend.complete("Reply with the single word ok.", seed=0, max_tokens=max_tokens)
+    except Exception as exc:
+        raise SystemExit(
+            f"preflight generation failed at max_tokens={max_tokens} against a "
+            f"{max_model_len}-token context window: {exc}") from exc
+
+
 def main() -> None:
     sys.path.insert(0, str(find_package_root()))
+    # The cap lives with the experiment, not with this runner, so there is one
+    # number to change and the window follows it.
+    from mats.sweep import MAX_TOKENS, MAX_WORKERS
 
-    _start_server()
-    state = sweep(_backend(), pathlib.Path("/kaggle/working/phase1"))
+    max_tokens = int(os.environ.get("MATS_MAX_TOKENS", MAX_TOKENS))
+    max_workers = int(os.environ.get("MATS_MAX_WORKERS", MAX_WORKERS))
+    max_model_len = max_tokens + PROMPT_RESERVE
+
+    _start_server(max_model_len)
+    backend = _backend()
+    _preflight(backend, max_tokens, max_model_len)
+    state = sweep(backend, pathlib.Path("/kaggle/working/phase1"),
+                  max_tokens=max_tokens, max_workers=max_workers)
 
     passing = state.get("cells_passing_G_A", [])
     print(f"\n{len(state['cells'])} cells, {len(state['failed_cells'])} failed, "

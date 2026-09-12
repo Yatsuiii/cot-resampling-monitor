@@ -65,7 +65,8 @@ def test_summary_is_written_after_every_cell(patched, monkeypatch):
         real_write = patched.__dict__["json"].dumps
 
         state = patched.sweep(DummyBackend(), out, datasets=["fixture"],
-                              families=["authority", "sycophancy"], n_items=6)
+                              families=["authority", "sycophancy"], n_items=6,
+                              max_tokens=256, max_workers=2)
         summary = json.loads((out / "summary.json").read_text())
         assert summary["complete"] is True
         assert set(summary["cells"]) == {"fixture__authority", "fixture__sycophancy"}
@@ -80,7 +81,7 @@ def test_a_failing_cell_is_recorded_and_the_grid_continues(patched):
         out = Path(tmp)
         state = patched.sweep(DummyBackend(), out, datasets=["fixture"],
                               families=["few_shot", "authority"], n_items=6,
-                              bias_letter="Z")
+                              bias_letter="Z", max_tokens=256, max_workers=2)
         assert "fixture__few_shot" in state["failed_cells"]
         assert "fixture__authority" in state["cells"], "grid aborted on one failure"
         assert state["complete"] is True
@@ -105,7 +106,8 @@ def test_partial_summary_survives_an_interrupted_grid(patched, monkeypatch):
         out = Path(tmp)
         with pytest.raises(KeyboardInterrupt):
             patched.sweep(DummyBackend(), out, datasets=["fixture"],
-                          families=["authority", "sycophancy"], n_items=6)
+                          families=["authority", "sycophancy"], n_items=6,
+                          max_tokens=256, max_workers=2)
         summary = json.loads((out / "summary.json").read_text())
         assert summary["complete"] is False
         assert len(summary["cells"]) == 1, "the finished cell was lost"
@@ -115,3 +117,67 @@ def test_partial_summary_survives_an_interrupted_grid(patched, monkeypatch):
                                family(key.split("__", 1)[1]))
         for f, v in recomputed.items():
             assert cell[f] == v
+
+
+def test_the_context_window_is_sized_to_the_generation_cap(monkeypatch):
+    """The defect that killed the first full grid.
+
+    The runner asked for max_tokens=8192 against a hardcoded 6144-token window.
+    vLLM rejects such a request outright, so all 48 completions returned 400
+    and the run died on the first call out of the corpus filter, after the
+    model had already loaded. Nothing in the file linked the two numbers.
+    """
+    mod = _module()
+    launched = {}
+
+    class FakeServer:
+        def terminate(self):
+            pass
+
+    def fake_popen(argv, **kw):
+        launched["argv"] = argv
+        return FakeServer()
+
+    monkeypatch.setattr(mod.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(mod, "_wait_ready", lambda *a, **kw: None)
+    monkeypatch.setattr(mod.atexit, "register", lambda *a, **kw: None)
+
+    mod._start_server(11264)
+    argv = launched["argv"]
+    assert "--max-model-len" in argv
+    assert argv[argv.index("--max-model-len") + 1] == "11264"
+    assert "6144" not in argv, "a second, independent window literal came back"
+
+
+def test_the_prompt_reserve_covers_the_largest_prompt_the_grid_can_build():
+    """Measured over the real corpora, the worst prompt is the 3-shot few_shot
+    cell on MMLU at 5,843 characters. At a conservative 3 characters per token
+    that is ~1,950, so the reserve must leave room for it with margin."""
+    mod = _module()
+    worst_prompt_tokens = 5843 // 3
+    assert mod.PROMPT_RESERVE > worst_prompt_tokens
+
+
+def test_preflight_names_both_numbers_when_the_cap_is_rejected():
+    """A rejected cap must not reach the corpus filter, where it reads as an
+    unanswerable corpus tens of minutes in."""
+    mod = _module()
+
+    class Rejecting:
+        def complete(self, prompt, **kw):
+            raise RuntimeError("HTTP Error 400: Bad Request")
+
+    with pytest.raises(SystemExit) as exc:
+        mod._preflight(Rejecting(), 8192, 6144)
+    assert "8192" in str(exc.value) and "6144" in str(exc.value)
+
+
+def test_the_grid_loop_cannot_fall_back_to_a_module_level_cap():
+    """max_tokens and max_workers are required keyword arguments, so the cap
+    cannot silently differ between the filter and the cells again."""
+    import inspect
+
+    params = inspect.signature(_module().sweep).parameters
+    for name in ("max_tokens", "max_workers"):
+        assert params[name].default is inspect.Parameter.empty
+        assert params[name].kind is inspect.Parameter.KEYWORD_ONLY
