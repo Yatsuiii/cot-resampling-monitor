@@ -1,7 +1,8 @@
 # Resampling-only unfaithfulness monitor
 
-Built for the MATS 12.0 (Neel Nanda stream) application, Option A. **Not
-submitted** - see Outcome.
+Submitted for the MATS 12.0 (Neel Nanda stream) application, Option A, as an
+honest negative result: the protocol did not fail to detect unverbalized
+influence, it failed to elicit any. See Outcome.
 
 **Question.** When a planted cue changes a reasoning model's answer without ever
 appearing in its chain-of-thought, can black-box resampling statistics flag that
