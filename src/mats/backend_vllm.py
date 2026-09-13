@@ -6,8 +6,14 @@ arbitrary sentence boundary, which only the raw-prompt endpoint supports
 cleanly. The caller is responsible for having already applied the model's chat
 template to `prompt` (the Kaggle notebook does this once via the tokenizer).
 
-Determinism: vLLM honours the `seed` field per request, so (prompt, seed) is
-reproducible as long as the server config is fixed.
+Determinism: vLLM honours the `seed` field per request, but that does NOT make
+(prompt, seed) reproducible under concurrency. The 09-12 grid ran two cue
+families that happened to build byte-identical prompts at identical seeds, and
+only 25/40 (ARC) and 15/40 (MMLU) chains came back identical: continuous
+batching changes batch composition, and therefore the numerics, between runs.
+Answers were far more stable than the text that produced them (the flip label
+agreed on 79 of those 80 pairs), so treat the seed as reproducing decisions,
+not tokens.
 
 Only the standard library is imported here so the analysis package stays
 installable without vLLM present; the server itself runs in the notebook.
@@ -22,6 +28,16 @@ import urllib.request
 from collections.abc import Callable
 
 from mats.backend import Completion
+
+
+# Slowest per-stream generation rate to plan for on one Kaggle T4. The 09-12
+# grid logged 230-270 tok/s aggregate across 16 concurrent requests, about 15
+# each, and 14-15 tok/s while a single long chain drained. Planning at 10 keeps
+# roughly 40 percent of margin. This is the floor a request is judged against,
+# not a measurement of typical speed.
+MIN_TOKENS_PER_SECOND = 10.0
+# Queueing, prefill and the round trip, none of which scale with max_tokens.
+REQUEST_OVERHEAD_SECONDS = 60.0
 
 
 def _plain(prompt: str, prefix: str) -> str:
@@ -45,11 +61,7 @@ class VLLMBackend:
         temperature: float = 0.8,
         top_p: float = 0.95,
         stop: list[str] | None = None,
-        # Under concurrent load (max_workers > 1) a request's per-token share of
-        # throughput shrinks, so a long early-position regeneration (500-1200
-        # tokens) can take several minutes even though the server is healthy -
-        # 120s was measured too short at max_workers=16 and killed a live run.
-        timeout: float = 600.0,
+        min_tokens_per_second: float = MIN_TOKENS_PER_SECOND,
         render: Callable[[str, str], str] | None = None,
     ) -> None:
         self.model = model
@@ -57,8 +69,17 @@ class VLLMBackend:
         self.temperature = temperature
         self.top_p = top_p
         self.stop = stop
-        self.timeout = timeout
+        self.min_tokens_per_second = min_tokens_per_second
         self._render = render or _plain
+
+    def _deadline(self, max_tokens: int) -> float:
+        """Seconds to allow a request that may generate `max_tokens` tokens.
+
+        A fixed deadline cannot be right for both ends of this workload: the
+        LLM monitor asks for 1,024 tokens and a cue chain for 8,192, and the
+        same number is either far too loose for one or fatal for the other.
+        """
+        return max_tokens / self.min_tokens_per_second + REQUEST_OVERHEAD_SECONDS
 
     def complete(
         self,
@@ -104,7 +125,8 @@ class VLLMBackend:
         last_error: Exception | None = None
         for attempt in range(retries):
             try:
-                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                deadline = self._deadline(max_tokens)
+                with urllib.request.urlopen(request, timeout=deadline) as response:
                     payload = json.loads(response.read())
                 choice = payload["choices"][0]
                 usage = payload.get("usage") or {}

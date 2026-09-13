@@ -62,3 +62,29 @@ def test_pivot_must_be_in_range():
     except ValueError:
         return
     raise AssertionError("expected ValueError for out-of-range pivot")
+
+
+def test_the_request_deadline_covers_the_tokens_it_asked_for():
+    """Three MMLU cells of the 09-12 grid died on a client-side TimeoutError
+    while the server was healthy and returning 200s.
+
+    The deadline was a fixed 600s. A chain running to the 8,192-token cap at
+    the ~15 tok/s per stream that 16-way concurrency leaves needs about 546s,
+    so the deadline sat inside the noise band of normal operation. It has to be
+    a function of the tokens requested, not a constant.
+    """
+    from mats.backend_vllm import VLLMBackend
+
+    b = VLLMBackend(model="m")
+    slowest_measured_rate = 14.0          # tok/s, one long chain draining
+    assert b._deadline(8192) > 8192 / slowest_measured_rate
+    assert b._deadline(8192) > b._deadline(1024), "deadline ignores the request size"
+
+
+def test_a_short_request_is_not_given_a_long_chain_deadline():
+    """The LLM monitor asks for 1,024 tokens. One constant cannot be right for
+    both it and an 8,192-token chain, which is why the constant was wrong."""
+    from mats.backend_vllm import VLLMBackend
+
+    b = VLLMBackend(model="m")
+    assert b._deadline(1024) < b._deadline(8192) / 4
