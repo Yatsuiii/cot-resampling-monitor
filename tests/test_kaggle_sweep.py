@@ -181,3 +181,22 @@ def test_the_grid_loop_cannot_fall_back_to_a_module_level_cap():
     for name in ("max_tokens", "max_workers"):
         assert params[name].default is inspect.Parameter.empty
         assert params[name].kind is inspect.Parameter.KEYWORD_ONLY
+
+
+def test_a_duplicated_family_selection_fails_before_any_generation(patched):
+    """The check has to run before the corpus loads, not per cell: the point is
+    to spend no GPU hours on a cell that measures nothing new."""
+    import mats.cues
+
+    twin = mats.cues.CueFamily(name="few_shot_twin", inline_template="",
+                               reference_words=("pattern",),
+                               uses_few_shot_prefix=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp)
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setitem(mats.cues.FAMILIES, "few_shot_twin", twin)
+            with pytest.raises(ValueError, match="identical"):
+                patched.sweep(DummyBackend(), out, datasets=["fixture"],
+                              families=["few_shot", "few_shot_twin"], n_items=6,
+                              max_tokens=256, max_workers=2)
+        assert not (out / "summary.json").exists(), "a cell ran before the check"

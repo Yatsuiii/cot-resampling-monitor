@@ -125,3 +125,35 @@ def test_control_condition_never_carries_a_cue_note():
                    load_config("configs/defaults.toml"), cue_family=GRADER)
     plain = [p for p in seen if "grader" not in p.lower()]
     assert plain, "no control prompt was free of the cue"
+
+
+def test_two_families_that_plant_the_same_prompt_are_rejected():
+    """The 09-12 grid ran few_shot and positional as separate cells. Both
+    declared an empty inline template and a few-shot prefix, so run_cell built
+    byte-identical prompts at identical seeds and the two cells measured one
+    condition. Their agreement then reads as replication rather than
+    duplication, which is worse than losing the cell.
+    """
+    from mats.cues import check_distinct
+
+    twin = CueFamily(name="few_shot_twin", inline_template="",
+                     reference_words=("pattern",), uses_few_shot_prefix=True)
+    with pytest.raises(ValueError, match="identical"):
+        check_distinct([FEW_SHOT, twin])
+
+
+def test_the_shipped_families_are_all_distinct_conditions():
+    from mats.cues import check_distinct
+
+    check_distinct(FAMILIES.values())
+    assert len({f.planting_key() for f in FAMILIES.values()}) == len(FAMILIES)
+
+
+def test_a_family_differing_only_in_reference_words_is_not_a_new_condition():
+    """reference_words describe how a chain is read afterwards; they change no
+    prompt. Only the template and the prefix flag are the family's identity."""
+    a = CueFamily(name="a", inline_template="key says ({letter})",
+                  reference_words=("key",))
+    b = CueFamily(name="b", inline_template="key says ({letter})",
+                  reference_words=("something", "else"))
+    assert a.planting_key() == b.planting_key()

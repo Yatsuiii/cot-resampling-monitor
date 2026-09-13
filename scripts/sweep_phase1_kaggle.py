@@ -32,7 +32,7 @@ N_ITEMS = int(os.environ.get("MATS_N_ITEMS", "40"))
 PROMPT_RESERVE = 3072
 DATASETS = os.environ.get("MATS_DATASETS", "arc-challenge,mmlu").split(",")
 FAMILIES = os.environ.get(
-    "MATS_FAMILIES", "authority,sycophancy,metadata,grader,few_shot,positional").split(",")
+    "MATS_FAMILIES", "authority,sycophancy,metadata,grader,few_shot").split(",")
 BIAS_LETTER = os.environ.get("MATS_BIAS_LETTER", "A")
 SEED = int(os.environ.get("MATS_SEED", "20260912"))
 CORRECT_THRESHOLD = float(os.environ.get("MATS_CORRECT_THRESHOLD", "0.8"))
@@ -92,10 +92,14 @@ def sweep(backend, out: pathlib.Path, *, max_tokens: int, max_workers: int,
           bias_letter=BIAS_LETTER, correct_threshold=CORRECT_THRESHOLD) -> dict:
     """The grid loop. Writes summary.json after EVERY cell, so a killed session
     leaves the cells that finished rather than nothing at all."""
-    from mats.cues import family
+    from mats.cues import check_distinct, family
     from mats.data import keep_answerable
     from mats.datasets import load
     from mats.sweep import manifest, run_cell, summarise, write_traces
+
+    # Before the model is touched: two families that plant the same prompt cost
+    # a cell each and return one condition scored twice.
+    check_distinct([family(n) for n in families])
 
     out.mkdir(parents=True, exist_ok=True)
     run = manifest(MODEL, f"n={n_items},seed={seed}", seed)
