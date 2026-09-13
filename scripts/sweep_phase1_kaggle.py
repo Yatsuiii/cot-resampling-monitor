@@ -94,7 +94,7 @@ def sweep(backend, out: pathlib.Path, *, max_tokens: int, max_workers: int,
     leaves the cells that finished rather than nothing at all."""
     from mats.cues import check_distinct, family
     from mats.data import keep_answerable
-    from mats.datasets import load
+    from mats.datasets import load, sampling_order
     from mats.sweep import manifest, run_cell, summarise, write_traces
 
     # Before the model is touched: two families that plant the same prompt cost
@@ -112,7 +112,9 @@ def sweep(backend, out: pathlib.Path, *, max_tokens: int, max_workers: int,
 
     flush()
     for dataset in datasets:
-        pool = load(dataset)
+        # keep_answerable returns a prefix, so the order it is handed decides
+        # the sample. Corpus order is grouped by subject for MMLU.
+        pool = sampling_order(load(dataset), seed=seed)
         questions = keep_answerable(backend, pool, threshold=correct_threshold,
                                     k=4, seed=seed, limit=n_items,
                                     max_tokens=max_tokens, max_workers=max_workers)

@@ -15,6 +15,7 @@ plausible at all.
 from __future__ import annotations
 
 import hashlib
+import random
 
 from .prompts import Question
 
@@ -119,3 +120,20 @@ def load(name: str, **kwargs) -> list[Question]:
     if name not in LOADERS:
         raise ValueError(f"unknown dataset {name!r}; have {sorted(LOADERS)}")
     return LOADERS[name](**kwargs)
+
+
+def sampling_order(questions: list[Question], *, seed: int) -> list[Question]:
+    """The corpus reordered so that a prefix of it is a fair sample.
+
+    `keep_answerable` scans in the order it is handed and stops once it has
+    enough, so whatever it returns is a prefix. A corpus grouped by topic then
+    yields a sample from one topic: the 09-12 grid's whole 40-item MMLU arm
+    came from the first 45 questions of abstract_algebra, because `cais/mmlu`
+    `all` is ordered by subject.
+
+    Seeded, so the sample is reproducible from the run manifest, and applied to
+    every corpus rather than to the one that was caught.
+    """
+    shuffled = list(questions)
+    random.Random(seed).shuffle(shuffled)
+    return shuffled

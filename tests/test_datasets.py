@@ -8,7 +8,8 @@ import sys
 import pytest
 
 from mats.datasets import (LETTERS, arc_row_to_question, gpqa_row_to_question,
-                           load, mmlu_row_to_question)
+                           load, mmlu_row_to_question, sampling_order)
+from mats.prompts import Question
 
 
 def _arc_row(i=0):
@@ -113,3 +114,35 @@ def test_importing_the_schema_layer_does_not_import_datasets():
     src = open(mod.__file__, encoding="utf-8").read()
     top = src.split("def ")[0]
     assert "from datasets import" not in top, "datasets imported at module level"
+
+
+def test_a_prefix_of_the_sampling_order_is_not_one_subject():
+    """The 09-12 grid's entire 40-item MMLU arm was abstract_algebra, because
+    `cais/mmlu` `all` is ordered by subject and `keep_answerable` returns a
+    prefix. This test fails against that behaviour.
+    """
+    grouped = [Question(qid=f"{subject}-{i}", stem="q",
+                        options={"A": "a", "B": "b", "C": "c", "D": "d"}, gold="A")
+               for subject in ("algebra", "biology", "history", "law")
+               for i in range(50)]
+    prefix = sampling_order(grouped, seed=20260912)[:40]
+    subjects = {q.qid.rsplit("-", 1)[0] for q in prefix}
+    assert len(subjects) == 4, f"prefix drawn from {subjects}"
+    assert {q.qid.rsplit("-", 1)[0] for q in grouped[:40]} == {"algebra"}, \
+        "fixture no longer reproduces the grouped-corpus shape"
+
+
+def test_the_sampling_order_is_reproducible_from_the_seed():
+    qs = [Question(qid=str(i), stem="q", options={"A": "a", "B": "b"}, gold="A")
+          for i in range(200)]
+    assert sampling_order(qs, seed=7) == sampling_order(qs, seed=7)
+    assert sampling_order(qs, seed=7) != sampling_order(qs, seed=8)
+    assert sorted(q.qid for q in sampling_order(qs, seed=7)) == sorted(q.qid for q in qs)
+
+
+def test_the_sampling_order_does_not_mutate_the_corpus():
+    qs = [Question(qid=str(i), stem="q", options={"A": "a", "B": "b"}, gold="A")
+          for i in range(20)]
+    before = [q.qid for q in qs]
+    sampling_order(qs, seed=1)
+    assert [q.qid for q in qs] == before

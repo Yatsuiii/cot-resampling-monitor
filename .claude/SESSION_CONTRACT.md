@@ -1,67 +1,52 @@
 # SESSION_CONTRACT
 
-Objective: Make the Phase 1 grid runnable on Kaggle by removing the
-cap/window mismatch that made every vLLM completion return 400, and make that
-class of mismatch impossible to repeat silently.
+Objective: Make the corpus sample a sample. `keep_answerable` scans in the
+order it is handed and stops at its limit, so the 09-12 grid's entire 40-item
+"MMLU" arm came from the first 45 questions of one subject. Then re-run the
+five MMLU cells so that arm is both a fair sample and internally consistent.
 
 Branch: resampling-monitor
 
-Parent: bd4b74c
+Parent: be2a1ea (plus the uncommitted deadline and duplicate-family fixes)
 
 Allowed files:
 - /home/Yatsuiii/MATS/** only
-- scripts/sweep_phase1_kaggle.py, tests/**, .claude/SESSION_CONTRACT.md
-- NOT: src/mats/sweep.py scoring, cues.py, signals.py, resample.py, metrics.py,
-  experiment.py, repair.py, data.py
+- src/mats/datasets.py, scripts/sweep_phase1_kaggle.py, tests/**,
+  .claude/SESSION_CONTRACT.md
+- NOT: data.py, sweep.py scoring, cues.py, signals.py, resample.py, metrics.py,
+  experiment.py, repair.py, prompts.py
 
 Non-goals:
-- Changing the cue families, the detectors, the gate, or what counts positive.
-- Changing MAX_TOKENS itself. The 8192 cap is measured and stays.
-- Re-running anything here. No GPU on this machine.
+- Changing keep_answerable. Its prefix-and-stop behaviour is deliberate: order
+  decides which questions win, so concurrency must not be able to change them.
+  The defect is the order it is handed, not what it does with it.
+- Re-running the ARC half. Its five cells are sha256-verified and unaffected by
+  any fix in flight; ARC and MMLU are never compared item-wise, so one run_id
+  per corpus is sound.
+- Changing MAX_TOKENS, the gate, or what counts as a positive.
 
-The defect, from the kernel log of yoursonly/mats-phase1-full-grid:
+The defect, from the 09-12 traces:
 
-The runner starts vLLM with `--max-model-len 6144` and generates with
-`max_tokens=8192`. vLLM rejects any request whose max_tokens exceeds the
-context window, so all 48 completion requests returned 400 Bad Request and the
-run died on the first call out of `keep_answerable`, after the model had
-already loaded. Two numbers in the same file, 24 lines apart, that must agree
-and had nothing enforcing it. The cap was raised to 8192 in 1980d27 to stop
-truncating chains; the window was never raised with it.
+  All 40 MMLU items are abstract_algebra, corpus indices 0-44 of 14,042. The
+  filter scanned 45 questions, kept 40 at an 89 percent pass rate, and stopped.
+  `cais/mmlu` `all` is grouped by subject, so a prefix of it is one subject.
+  The results table calls that arm "mmlu", which overstates it.
 
-Evidence:
-- log line 135: `max_seq_len=6144`; scripts/sweep_phase1_kaggle.py:29 `8192`
-- log lines 225-272: 48 consecutive `POST /v1/completions 400 Bad Request`,
-  the first one immediately after the corpora finish downloading
-- log line 168: `GPU KV cache size: 27,264 tokens` - the window can be raised
-  without running out of KV cache
-- sweep.py:37 records why 8192 and not less: at a 4,096 cap, 3 of 8 measured
-  chains truncated
-
-Prompt reserve is measured, not guessed
-(scratchpad/measure_prompt.py over the real corpora, repo row adapters):
-
-  worst prompt in the entire grid   5,843 chars  (mmlu / few_shot, 3-shot)
-  p99                               3,153 chars
-  median                            1,281 chars
-  ~1,950 tokens at a conservative 3 chars/token
-
-Reserve 3,072 gives ~57 percent headroom over that worst case, so window
-= 8,192 + 3,072 = 11,264, which fits the 27,264-token KV cache.
+  ARC is affected by the same mechanism and merely got away with it: its
+  validation split is not semantically grouped, so a prefix is close to a
+  random sample. The fix is applied to every corpus rather than special-casing
+  MMLU.
 
 Acceptance gates:
-1. The context window is derived from the generation cap in code, not written
-   as a second literal. Grepping the runner finds no independent window number.
-2. MAX_TOKENS and MAX_WORKERS have exactly one definition in the repo
-   (src/mats/sweep.py). The Kaggle runner and the kernel script read it.
-3. A preflight completion at the configured cap runs before the corpus filter,
-   so a mismatch fails in seconds rather than after the model loads.
-4. Full test suite passes, with a new test covering the derived-window
-   invariant.
+1. Taking a prefix of what the sweep hands the filter is a fair sample: a
+   subject-grouped corpus must not yield a single-subject prefix.
+2. The order is seeded, so the sample is reproducible from the manifest.
+3. The runner passes every corpus through it, with no per-corpus special case.
+4. Full suite passes, with a test that fails against the 09-12 behaviour.
 
 Verification:
-- `python -m pytest -q` from /home/Yatsuiii/MATS
-- `python -c "import ast; ast.parse(open('scripts/sweep_phase1_kaggle.py').read())"`
-- grep the runner for a literal max-model-len value: must find none
+- `python -m pytest -q`
+- `ruff check src/ scripts/ tests/` (7 pre-existing findings, no new ones)
+- Re-run evidence: 5 MMLU cells, one item set, subjects spread across MMLU
 
 Status: active
